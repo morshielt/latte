@@ -12,6 +12,17 @@ Arg. 	   Arg ::= Type Ident;
 
 separator  Arg "," ;
 
+
+-- ClassExtDef.   TopDef ::= "class" Ident "extends" Ident "{" [ClsStmt] "}" ;
+
+-- ClassDef.      TopDef ::= "class" Ident "{" [ClsStmt] "}" ;
+
+-- FnProp.        ClsStmt ::= FnDef ;
+
+-- AttrProp.      ClsStmt ::= Type Ident ";" ;
+
+-- separator nonempty ClsStmt "";
+
 -- statements ----------------------------------------------
 
 Block.     Block ::= "{" [Stmt] "}" ;
@@ -30,11 +41,11 @@ Init.      Item ::= Ident "=" Expr ;
 
 separator nonempty Item "," ;
 
-Ass.       Stmt ::= Ident "=" Expr  ";" ;
+Ass.       Stmt ::= LValue "=" Expr  ";" ;
 
-Incr.      Stmt ::= Ident "++"  ";" ;
+Incr.      Stmt ::= Ident "++"  ";" ;  -- czy tu też LValue zamiast Ident
 
-Decr.      Stmt ::= Ident "--"  ";" ;
+Decr.      Stmt ::= Ident "--"  ";" ;  -- czy tu też LValue zamiast Ident
 
 Ret.       Stmt ::= "return" Expr ";" ;
 
@@ -46,13 +57,13 @@ CondElse.  Stmt ::= "if" "(" Expr ")" Stmt "else" Stmt  ;
 
 While.     Stmt ::= "while" "(" Expr ")" Stmt ;
 
--- For.	   Stmt ::= "for" "(" Arg ":" Expr ")" Stmt ;
+For.	   Stmt ::= "for" "(" Arg ":" Expr ")" Stmt ;
 
 SExp.      Stmt ::= Expr  ";" ;
 
 -- Types ---------------------------------------------------
 
--- Arr.     Type ::= Type "[]" ;
+Arr.     Type ::= Type "[]" ;
 
 Int.       Type ::= "int" ;
 
@@ -62,17 +73,21 @@ Bool.      Type ::= "boolean" ;
 
 Void.      Type ::= "void" ;
 
-internal   Fun. Type ::= Type "(" [Type] ")" ;
+internal   Fun. Type ::= Type "(" [Type] ")" ; -- powoduje unused rules
 
 separator  Type "," ;
 
 -- Expressions ---------------------------------------------
 
--- EArrInit.   Expr7 ::= "new" Type "[" Expr "]" ;
+ArrAcc.    ArrAcc ::= Expr7 "[" Expr "]";
 
--- EArrGet.   Expr6 ::= Expr6 "[" Expr "]" ;
+EArrNew.   Expr7 ::= "new" Type "[" Expr "]" ;
 
-EVar.      Expr6 ::= Ident ;
+EArrGet.   Expr7 ::= ArrAcc;
+
+EArrLen.   Expr6 ::= Expr7 "." "length";
+
+EVar.      Expr7 ::= Ident ;
 
 ELitInt.   Expr6 ::= Integer ;
 
@@ -98,9 +113,18 @@ EAnd.      Expr1 ::= Expr2 "&&" Expr1 ;
 
 EOr.       Expr ::= Expr1 "||" Expr ;
 
-coercions  Expr 6 ;
+coercions  Expr 7 ;
 
 separator  Expr "," ;
+
+-- lvalues -------------------------------------------------
+
+LValIdent.        LValue ::= Ident ;
+LValArr.          LValue ::= ArrAcc;
+
+-- LValArr.          LValue ::= LValue "[" Expr "]";
+
+-- ArrayElem.  ArrElemAccess ::= LValue "[" Expr "]" ;
 
 -- operators -----------------------------------------------
 

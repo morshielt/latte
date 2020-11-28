@@ -26,7 +26,7 @@ import           ErrM
 
 type ParseFun a = [Token] -> Err a
 
-myLLexer = myLexervvv
+myLLexer = myLexer
 
 type Verbosity = Int
 
