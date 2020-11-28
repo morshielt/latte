@@ -4,24 +4,23 @@ entrypoints Program ;
 
 Program.   Program ::= [TopDef] ;
 
-FnDef.	   TopDef ::= Type Ident "(" [Arg] ")" Block ;
+FnDef.     TopDef ::= Type Ident "(" [Arg] ")" Block ;
+
+ClDef.     TopDef ::= "class" Ident ClassExt "{" [ClMember] "}" ;
 
 separator nonempty TopDef "" ;
 
-Arg. 	   Arg ::= Type Ident;
+NoExt.  ClassExt ::= ;
+Ext.       ClassExt ::= "extends" Ident ;
+
+Field.     ClMember ::= Type Ident ";" ;
+Method.    ClMember ::= Type Ident "(" [Arg] ")" Block ;
+
+separator ClMember "";
+
+Arg.       Arg ::= Type Ident;
 
 separator  Arg "," ;
-
-
--- ClassExtDef.   TopDef ::= "class" Ident "extends" Ident "{" [ClsStmt] "}" ;
-
--- ClassDef.      TopDef ::= "class" Ident "{" [ClsStmt] "}" ;
-
--- FnProp.        ClsStmt ::= FnDef ;
-
--- AttrProp.      ClsStmt ::= Type Ident ";" ;
-
--- separator nonempty ClsStmt "";
 
 -- statements ----------------------------------------------
 
@@ -35,17 +34,17 @@ BStmt.     Stmt ::= Block ;
 
 Decl.      Stmt ::= Type [Item] ";" ;
 
-NoInit.    Item ::= Ident ; 
+NoInit.    Item ::= Ident ;
 
 Init.      Item ::= Ident "=" Expr ;
 
 separator nonempty Item "," ;
 
-Ass.       Stmt ::= LValue "=" Expr  ";" ;
+Ass.       Stmt ::= Expr8 "=" Expr  ";" ;
 
-Incr.      Stmt ::= Ident "++"  ";" ;  -- czy tu też LValue zamiast Ident
+Incr.      Stmt ::= Ident "++"  ";" ;
 
-Decr.      Stmt ::= Ident "--"  ";" ;  -- czy tu też LValue zamiast Ident
+Decr.      Stmt ::= Ident "--"  ";" ;
 
 Ret.       Stmt ::= "return" Expr ";" ;
 
@@ -57,13 +56,14 @@ CondElse.  Stmt ::= "if" "(" Expr ")" Stmt "else" Stmt  ;
 
 While.     Stmt ::= "while" "(" Expr ")" Stmt ;
 
-For.	   Stmt ::= "for" "(" Arg ":" Expr ")" Stmt ;
-
 SExp.      Stmt ::= Expr  ";" ;
 
--- Types ---------------------------------------------------
+For.       Stmt ::= "for" "(" Type Ident ":" Expr ")" Stmt ;
 
-Arr.     Type ::= Type "[]" ;
+-- Types ---------------------------------------------------
+Arr.       Type  ::= Type "[]" ;
+
+Obj.       Type ::= Ident ;
 
 Int.       Type ::= "int" ;
 
@@ -73,21 +73,46 @@ Bool.      Type ::= "boolean" ;
 
 Void.      Type ::= "void" ;
 
-internal   Fun. Type ::= Type "(" [Type] ")" ; -- powoduje unused rules
+internal   Fun. Type ::= Type "(" [Type] ")" ;
 
 separator  Type "," ;
 
+-- coercions  Type 1 ;
+
+
 -- Expressions ---------------------------------------------
 
-ArrAcc.    ArrAcc ::= Expr7 "[" Expr "]";
+EVar.          Expr8 ::= Ident ;
 
-EArrNew.   Expr7 ::= "new" Type "[" Expr "]" ;
+-- AttrAcc. AttrAccess ::= Expr7 "." Ident ;
+-- EAttrAccess.   Expr8 ::= AttrAccess ;
+EAttrAccess.   Expr8 ::= Expr7 "." Ident ;
 
-EArrGet.   Expr7 ::= ArrAcc;
+-- ArrayElem.  ArrElemAccess ::= Expr7 "[" Expr "]" ;
+-- EArrAccess.    Expr8 ::= ArrElemAccess ;
+EArrAccess.    Expr8 ::= Expr7 "[" Expr "]" ;
 
-EArrLen.   Expr6 ::= Expr7 "." "length";
 
-EVar.      Expr7 ::= Ident ;
+
+-- MCall.    MethodCall ::= Expr7 "." FunctionCall ;
+-- EMthCall.      Expr7 ::= MethodCall ;
+EMthCall.      Expr7 ::= Expr7 "." Ident "(" [Expr] ")" ;
+
+ENewArr.       Expr7 ::= "new" Type MaybeArr ;
+
+IsArr.  MaybeArr ::= "[" Expr "]" ;
+NotArr.  MaybeArr ::= ;
+
+
+-- ENew.          Expr7 ::= "new" Ident ;
+
+-- EFunCall.      Expr7 ::= FunctionCall ;
+-- FunctionCall.    FunctionCall ::= Ident "(" [Expr] ")" ;
+EApp.      Expr7 ::= Ident "(" [Expr] ")" ;
+
+
+
+ECastNull.     Expr6 ::= "(" Ident ")null";
 
 ELitInt.   Expr6 ::= Integer ;
 
@@ -95,7 +120,7 @@ ELitTrue.  Expr6 ::= "true" ;
 
 ELitFalse. Expr6 ::= "false" ;
 
-EApp.      Expr6 ::= Ident "(" [Expr] ")" ;
+-- EApp.      Expr6 ::= Ident "(" [Expr] ")" ;
 
 EString.   Expr6 ::= String ;
 
@@ -113,18 +138,35 @@ EAnd.      Expr1 ::= Expr2 "&&" Expr1 ;
 
 EOr.       Expr ::= Expr1 "||" Expr ;
 
-coercions  Expr 7 ;
+coercions  Expr 8 ;
 
 separator  Expr "," ;
 
--- lvalues -------------------------------------------------
 
-LValIdent.        LValue ::= Ident ;
-LValArr.          LValue ::= ArrAcc;
+-- misc ----------------------------------------------------
 
--- LValArr.          LValue ::= LValue "[" Expr "]";
+-- FunctionCall.    FunctionCall ::= Ident "(" [Expr] ")" ;
 
--- ArrayElem.  ArrElemAccess ::= LValue "[" Expr "]" ;
+-- ArrayElem.  ArrElemAccess ::= Expr7 "[" Expr "]" ;
+
+-- AttrAcc. AttrAccess ::= Expr7 "." Ident ;
+
+-- MCall.    MethodCall ::= Expr7 "." FunctionCall ;
+
+-- NewArr. NewArr ::= "new" Type "[" Expr "]" ;
+
+-- callables -----------------------------------------------
+
+-- -- CVNewArr. CValue ::= "(" NewArr ")" ;
+-- CVFunCall.           LValue ::= FunctionCall ;
+-- CVMetCall.           LValue ::= MethodCall ;
+-- -- CLValue. CValue ::= LValue ;
+-- -- CVMethodCall.        CValue ::= MethodCall "." FunctionCall;
+
+-- -- lvalues -------------------------------------------------
+-- LVJustIdent.         LValue ::= Ident ;
+-- LVArrayAcc.          LValue ::= ArrElemAccess ;
+-- LVAttrAcc.           LValue ::= AttrAccess ;
 
 -- operators -----------------------------------------------
 
@@ -158,3 +200,30 @@ comment    "//" ;
 
 comment    "/*" "*/" ;
 
+
+-- -- callables ---------------------------------------------
+
+-- CValFunCall.           CValue ::= FunCall ;
+-- CValMetCall.           CValue ::= MetCall ;
+-- -- CValLVal.              CValue ::= LValue;
+-- CJustIdent.         CValue ::= Ident ; -- x = 5;
+-- CalArrElem.       CValue ::= ArrElemAccess ; -- a[3] = 5;
+-- CValClsAttr.       CValue ::= AttrAccess ;  -- o.x = 5;
+
+
+-- FunCall.    FunCall ::= Ident "(" [Expr] ")" ;
+-- MCall.      MetCall ::= CValue "." FunCall ;
+
+
+-- -- assignables (lvals) ---------------------------------------------
+
+-- JustIdent.         LValue ::= Ident ; -- x = 5;
+-- LValArrElem.       LValue ::= ArrElemAccess ; -- a[3] = 5;
+-- LValClsAttr.       LValue ::= AttrAccess ;  -- o.x = 5;
+
+-- ArrayElem.  ArrElemAccess ::= CValue "[" Expr "]" ; 
+-- AttrAcc.    AttrAccess    ::= CValue "." Ident ; 
+-- -- ^ czy tu przeszkadza CValue?
+-- -- w sensie bo to umożliwia: funcRetObject().x = 6; ale czy to problem?
+
+-- --
