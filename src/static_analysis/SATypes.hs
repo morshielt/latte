@@ -57,11 +57,9 @@ typeToTCType Void                      = return TVoid
 typeToTCType cls@(Cls (Ident clsName)) = do-- TODO: check czy to na pewno nic nie psuje
     checkIfClassExists cls
     return $ TDClass clsName
-typeToTCType (Arr type_   ) = TArr <$> typeToTCType type_
-typeToTCType (Fun ret args) = do
-    ret'  <- typeToTCType ret
-    args' <- mapM typeToTCType args
-    return $ TDFun args' ret'
+typeToTCType (Arr type_) = TArr <$> typeToTCType type_
+typeToTCType (Fun ret args) =
+    TDFun <$> mapM typeToTCType args <*> typeToTCType ret
 
 
 ----------------------------------------------------------------------

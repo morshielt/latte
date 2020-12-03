@@ -25,6 +25,7 @@ import           Data.Map                      as M
 
 import           Control.Monad                  ( when )
 
+-- TODO: czy metody obiektów mają returny
 -- TODO: to chyba też już nie w typechecku
 -- int[][] arr = new int[][20];
 -- arr[1] = 5; -- TODO: co tu w ogóle można przypisać? tablicę odp. długości czy nic czy co????
@@ -33,7 +34,7 @@ import           Control.Monad                  ( when )
 
 -- TODO: check if main present
 -- TODO: cykliczne `extends`
--- TODO: do BStmt chyba potrzebuję jednak Reader monad?
+-- TODO : do BStmt chyba potrzebuję jednak Reader monad? tak jest.
 
 initScope = 0
 
@@ -106,27 +107,57 @@ checkClassDefsM ss = do
 checkClassDefM :: TopDef -> TCM TCEnv
 checkClassDefM (FnDef ret (Ident name) args (Block stmts)) = ask
 checkClassDefM (ClDef (Ident ident) classext clmembers   ) = do
-    env  <- ask
+    env <- ask
+-- TODO : czy istnieje parent TODO: ładny message, że nie istenieje
+    case classext of
+        NoExt       -> return ()
+        (Ext ident) -> checkIfClassExists (Cls ident)
+-- TODO : dodać atrybuty jako zmienne w tym scope
     env' <- foldM (go ident) env clmembers
-    -- foldM_ (go2 ident) env' clmembers
+    foldM_ (go2 ident) env' clmembers
+-- TODO : i uzupełnić memberów w mapie `classes`
     return $ env { classes = classes env' }
   where
-    -- go2 :: Var -> TCEnv -> ClMember -> TCM TCEnv
-    -- go2 ident env1 cmem = local (const env1) $ checkMethods ident cmem
+    go2 :: Var -> TCEnv -> ClMember -> TCM TCEnv
+    go2 ident env1 cmem = local (const env1) $ checkMethods ident cmem
     go :: Var -> TCEnv -> ClMember -> TCM TCEnv
     go ident env1 cmem = local (const env1) $ handleClsMember ident cmem
 
--- TODO: dodać atrybuty jako zmienne w tym scope
--- TODO: sprawdzać czy nazwy memberów się nie powtarzają
+
 -- TODO: wywołanie funkcji zewnetrznej w memberze
--- TODO: i uzupełnić memberów w mapie `classes`
--- TODO: czy istnieje parent
+-- FACT: nie ma rekurencyjnego wywoływania metod TODO: czy musi być?
+checkMethods :: Var -> ClMember -> TCM TCEnv
+checkMethods cls (Attr type_ (Ident ident)      ) = ask
+checkMethods cls (Meth ret (Ident ident) args bs) = do
+    ret'      <- typeToTCType ret
+    env       <- ask
+    -- TODO : set return
+    argsTypes <- handleArgs args
+    let
+        env' = env
+            { types       = argsTypes `union` types env
+            , expectedRet =
+                Just (ret', "class `" ++ cls ++ "` method `" ++ ident ++ "`")
+            }
+    local (const env') $ checkStmtM $ BStmt bs
+    ask
 
--- checkMethods :: Var -> ClMember -> TCM TCEnv
--- checkMethods cls (Attr type_ (Ident ident)) = ask
--- checkMethods cls (Meth ret (Ident ident) args _) = do
+handleArgs :: [Arg] -> TCM Types
+handleArgs args = do
+    scope <- asks scope
+    list  <- mapM
+        (\(Arg t (Ident var)) -> do
+            t' <- typeToTCType t
+            return (var, (t', scope + 1)) -- TODO: check czy na pewno wszystko co używa `handleArgs` jest BStmt i robi scope +1
+        )
+        args
+    let mapList = fromList list
+    if length list == length mapList
+        then return mapList
+        else throwTCM "Function arguments must have different names"
 
-
+-- TODO: jaki jest default decl klasy rekurencyjnej? (list atrybutem list)
+-- TODO : sprawdzać czy nazwy memberów się nie powtarzają
 handleClsMember :: Var -> ClMember -> TCM TCEnv
 handleClsMember cls (Attr type_ (Ident ident)) = do
     env <- ask
@@ -137,8 +168,10 @@ handleClsMember cls (Attr type_ (Ident ident)) = do
             t <- typeToTCType type_
             let clsDef' =
                     clsDef { members = M.insert ident t $ members clsDef }
-            let env' =
-                    env { types = M.insert ident (t, initScope) $ types env }
+            let
+                env' = env
+                    { types = M.insert ident (t, initScope + 1) $ types env
+                    } -- TODO: initScope + 1, gurl, zgubisz się (pewnie już się zgubiłaś, ciiiii)
             return $ env' { classes = M.insert cls clsDef' (classes env) }
 
 handleClsMember cls (Meth ret (Ident ident) args _) = do
@@ -167,31 +200,18 @@ checkFnDefsM ss = do
     go env' s = local (const env') $ checkFnDefM s
 
 checkFnDefM :: TopDef -> TCM TCEnv
-checkFnDefM (ClDef (Ident ident) classext clmembers   ) = ask
-checkFnDefM (FnDef ret (Ident name) args (Block stmts)) = do
-    -- TODO: dodać argumenty do enva przy sprawdzaniu funkcji
-    -- argsTypes <- handleArgs args
-    -- let fEnvWithArgs = fEnv { types       = argsTypes `union` types fEnv
-    --                         , expectedRet = Just (ret', name)
-    --                         }
-    -- local (const fEnvWithArgs) $ checkStmtM (BStmt bs)
-
-    checkStmtsM stmts
-    -- let ret' = typeToTCType ret
-    -- scope <- gets scope
-    -- env   <- get
-
-    -- let t    = TFun (map argToTCArg args) ret'
-    -- let fEnv = env { types = M.insert name (t, scope) (types env) }
-
-    -- argsTypes <- handleArgs args `throwExtraMsg` msg
-    -- let fEnvWithArgs = fEnv { types       = argsTypes `union` types fEnv
-    --                         , expectedRet = Just (ret', name)
-    --                         }
-    -- return ()
-
---     ask
-
+checkFnDefM (ClDef (Ident ident) classext clmembers) = ask
+checkFnDefM (FnDef ret (Ident name) args bs        ) = do
+    ret'      <- typeToTCType ret
+    env       <- ask
+    argsTypes <- handleArgs args
+-- TODO : set return
+-- TODO : dodać argumenty do enva przy sprawdzaniu funkcji
+    let env' = env { types       = argsTypes `union` types env
+                   , expectedRet = Just (ret', name)
+                   }
+    local (const env') $ checkStmtM (BStmt bs)
+    ask
 
 
 --- STMTS -----------------------------------------------------------------
@@ -371,15 +391,27 @@ checkExprM (ENew type_ (ArrSize sizeExpr)) = do
     matchExpType TInt sizeExpr
     TArr <$> typeToTCType type_
 checkExprM e@(ENew _ _) = throwMsg ["Illegal `new` expression: ", printTree e]
-checkExprM (EAttrAcc expr ident) = undefined
 -- TODO: jak się odwołuję poza tablicę, ale to raczej już później, bo w typechecku chyba nie mogę?
 checkExprM (EArrAcc expr1 expr2) = do
     (TArr act) <- matchExpType undefinedArrType expr1
     matchExpType TInt expr2
     return act
+checkExprM (EAttrAcc expr ident       ) = undefined
 checkExprM (EMethCall expr ident exprs) = undefined
-checkExprM (EApp ident exprs          ) = undefined
-
+checkExprM (EApp (Ident var) es       ) = do
+    typeScope <- getVarTypeScope var
+    case typeScope of
+        Nothing -> throwMsg ["function ", var, " is not declared"]
+        (Just (TDFun args ret, _)) -> do
+            checkArgs args es -- `throwExtraMsg` msg
+            return ret
+        (Just _) -> throwMsg [var, " is not a function"]
+  where
+    checkArgs :: [TCType] -> [Expr] -> TCM ()
+    checkArgs args es = if length args == length es
+        then mapM_ checkArg $ zip args es
+        else throwTCM "Invalid number of arguments in function call"
+        where checkArg (t, e) = matchExpType t e
 
 matchExpType :: TCType -> Expr -> TCM TCType
 matchExpType ex e
@@ -405,31 +437,6 @@ matchExpType ex e
             , printTree e
             ]
         return act
-
--- matchExpType undefinedArrType e = do
---     act <- checkExprM e
---     case act of
---         (TArr type_) -> return act
---         _            -> throwMsg
---             [ "Expected array type\nActual type:"
---             , show act
---             , "\nin expression: "
---             , printTree e
---             ]
---     return act
-
-
--- matchExpType ex e = do
---     act <- checkExprM e
---     when (ex /= act) $ throwMsg
---         [ "Expected type:"
---         , show ex
---         , "\nActual type:"
---         , show act
---         , "\nin expression: "
---         , printTree e
---         ]
---     return act
 
 checkBinOp :: [TCType] -> Expr -> Expr -> TCM TCType
 checkBinOp ts e1 e2 = do
