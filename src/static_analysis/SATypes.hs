@@ -37,6 +37,9 @@ data TCType = TString | TInt | TBool | TVoid | TArr TCType | TDClass Var | TDFun
 undefinedArrType :: TCType
 undefinedArrType = TArr TVoid
 
+wildcardClass :: TCType
+wildcardClass = TDClass ""
+
 instance Show TCType where
     show TString           = "string"
     show TInt              = "int"

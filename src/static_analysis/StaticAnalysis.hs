@@ -268,16 +268,20 @@ checkStmtM (BStmt (Block ss)) = do
     ask
 
 checkStmtM (Ass assignable e) = do
-    case assignable of
-        (EVar (Ident var)) -> do
-            t <- getVarType var
-            matchExpType t e
-        (EArrAcc accessible index) -> do -- TODO: w tym arrAcc są Expr7!!!!
-            (TArr t) <- matchExpType undefinedArrType accessible
-            matchExpType TInt index
-            matchExpType t    e
-        (EAttrAcc accessible attr) -> undefined
+    t <- checkExprM assignable
+    matchExpType t e
     ask
+-- checkStmtM (Ass assignable e) = do
+--     case assignable of
+--         (EVar (Ident var)) -> do
+--             t <- getVarType var
+--             matchExpType t e
+--         (EArrAcc accessible index) -> do -- TODO: w tym arrAcc są Expr7!!!! no i co z tego?
+--             (TArr t) <- matchExpType undefinedArrType accessible
+--             matchExpType TInt index
+--             matchExpType t    e
+--         (EAttrAcc accessible attr) -> undefined
+--     ask
 
 checkStmtM (     Incr e   ) = checkIncrDecr e
 checkStmtM (     Decr e   ) = checkIncrDecr e
@@ -334,22 +338,21 @@ matchReturn t = do
 
 checkIncrDecr :: Expr -> TCM TCEnv
 checkIncrDecr assignable = do
-    case assignable of
-        (EVar (Ident var)) -> do
-            t <- getVarType var
-            matchType [TInt] t
-            ask
-        (EArrAcc accessible index) -> do -- TODO: w tym arrAcc są Expr7!!!!
-            matchExpType (TArr TInt) accessible
-            matchExpType TInt        index
-            ask
-        (EAttrAcc accessible attr) -> undefined
-    -- ask
+    t <- checkExprM assignable
+    matchType [TInt] t
+    ask
 
-    -- t <- getVarType var
-    -- matchType [TInt] t `throwExtraMsg` msg
-    -- ask
-    -- where msg e = [e, "in statement:", printTree stmt]
+-- checkIncrDecr assignable = do
+--     case assignable of
+--         (EVar (Ident var)) -> do
+--             t <- getVarType var
+--             matchType [TInt] t
+--             ask
+--         (EArrAcc accessible index) -> do -- TODO: w tym arrAcc są Expr7!!!!
+--             matchExpType (TArr TInt) accessible
+--             matchExpType TInt        index
+--             ask
+--         (EAttrAcc accessible attr) -> undefined
 
 
 --- EXPRS -----------------------------------------------------------------
@@ -396,9 +399,30 @@ checkExprM (EArrAcc expr1 expr2) = do
     (TArr act) <- matchExpType undefinedArrType expr1
     matchExpType TInt expr2
     return act
-checkExprM (EAttrAcc expr ident       ) = undefined
-checkExprM (EMethCall expr ident exprs) = undefined
-checkExprM (EApp (Ident var) es       ) = do
+checkExprM (EAttrAcc expr (Ident ident)) = do
+    (TDClass clsName) <- matchExpType wildcardClass expr -- TODO: nigdy się teoretycznie nie powinno wywalić, bo matchExpType rzuca jc
+    classes           <- asks classes
+    case M.lookup clsName classes of
+        Nothing       -> throwTCM "IMPOSSIBLE ERROR, IT HAS TO EXIST"
+        (Just clsDef) -> case M.lookup ident (members clsDef) of
+            Nothing -> throwTCM "NO such attribute TODO msg"
+            (Just (TDFun _ _)) ->
+                throwTCM "It's a method not an attribute TODO msg"
+            (Just t) -> return t
+
+checkExprM (EMethCall expr (Ident ident) es) = do
+    (TDClass clsName) <- matchExpType wildcardClass expr -- TODO: nigdy się teoretycznie nie powinno wywalić, bo matchExpType rzuca jc
+    classes           <- asks classes
+    case M.lookup clsName classes of
+        Nothing       -> throwTCM "IMPOSSIBLE ERROR, IT HAS TO EXIST"
+        (Just clsDef) -> case M.lookup ident (members clsDef) of
+            Nothing                 -> throwTCM "NO such method TODO msg"
+            (Just (TDFun args ret)) -> do
+                checkArgs args es
+                return ret
+            (Just t) -> throwTCM "It's an attribute not a method TODO msg"
+
+checkExprM (EApp (Ident var) es) = do
     typeScope <- getVarTypeScope var
     case typeScope of
         Nothing -> throwMsg ["function ", var, " is not declared"]
@@ -406,12 +430,12 @@ checkExprM (EApp (Ident var) es       ) = do
             checkArgs args es -- `throwExtraMsg` msg
             return ret
         (Just _) -> throwMsg [var, " is not a function"]
-  where
-    checkArgs :: [TCType] -> [Expr] -> TCM ()
-    checkArgs args es = if length args == length es
-        then mapM_ checkArg $ zip args es
-        else throwTCM "Invalid number of arguments in function call"
-        where checkArg (t, e) = matchExpType t e
+
+checkArgs :: [TCType] -> [Expr] -> TCM ()
+checkArgs args es = if length args == length es
+    then mapM_ checkArg $ zip args es
+    else throwTCM "Invalid number of arguments in function call"
+    where checkArg (t, e) = matchExpType t e
 
 matchExpType :: TCType -> Expr -> TCM TCType
 matchExpType ex e
@@ -421,6 +445,17 @@ matchExpType ex e
             (TArr type_) -> return act
             _            -> throwMsg
                 [ "Expected array type\nActual type:"
+                , show act
+                , "\nin expression: "
+                , printTree e
+                ]
+        return act
+    | ex == wildcardClass = do
+        act <- checkExprM e
+        case act of
+            (TDClass clsName) -> return act
+            _                 -> throwMsg
+                [ "Expected class type\nActual type:"
                 , show act
                 , "\nin expression: "
                 , printTree e
