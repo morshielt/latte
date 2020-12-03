@@ -18,6 +18,15 @@ transProgram x = case x of
 transTopDef :: TopDef -> Result
 transTopDef x = case x of
   FnDef type_ ident args block -> failure x
+  ClDef ident classext clmembers -> failure x
+transClassExt :: ClassExt -> Result
+transClassExt x = case x of
+  NoExt -> failure x
+  Ext ident -> failure x
+transClMember :: ClMember -> Result
+transClMember x = case x of
+  Attr type_ ident -> failure x
+  Meth type_ ident args block -> failure x
 transArg :: Arg -> Result
 transArg x = case x of
   Arg type_ ident -> failure x
@@ -29,34 +38,45 @@ transStmt x = case x of
   Empty -> failure x
   BStmt block -> failure x
   Decl type_ items -> failure x
-  Ass ident expr -> failure x
-  Incr ident -> failure x
-  Decr ident -> failure x
+  Ass expr1 expr2 -> failure x
+  Incr expr -> failure x
+  Decr expr -> failure x
   Ret expr -> failure x
   VRet -> failure x
   Cond expr stmt -> failure x
   CondElse expr stmt1 stmt2 -> failure x
   While expr stmt -> failure x
   SExp expr -> failure x
+  For type_ ident expr stmt -> failure x
 transItem :: Item -> Result
 transItem x = case x of
   NoInit ident -> failure x
   Init ident expr -> failure x
 transType :: Type -> Result
 transType x = case x of
-  Array type_ -> failure x
+  Arr type_ -> failure x
+  Cls ident -> failure x
   Int -> failure x
   Str -> failure x
   Bool -> failure x
   Void -> failure x
   Fun type_ types -> failure x
+transArrSize :: ArrSize -> Result
+transArrSize x = case x of
+  ArrSize expr -> failure x
+  ClsNotArr -> failure x
 transExpr :: Expr -> Result
 transExpr x = case x of
   EVar ident -> failure x
+  EAttrAcc expr ident -> failure x
+  EArrAcc expr1 expr2 -> failure x
+  EMethCall expr ident exprs -> failure x
+  ENew type_ arrsize -> failure x
+  EApp ident exprs -> failure x
+  ECastNull ident -> failure x
   ELitInt integer -> failure x
   ELitTrue -> failure x
   ELitFalse -> failure x
-  EApp ident exprs -> failure x
   EString string -> failure x
   Neg expr -> failure x
   Not expr -> failure x

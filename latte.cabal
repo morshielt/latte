@@ -14,13 +14,16 @@ cabal-version:       >=1.10
 extra-source-files:  README.md
 
 executable latte
-  hs-source-dirs:      src src/parser
+  hs-source-dirs:      src src/parser src/static_analysis
   other-modules:
     AbsLatte
     ErrM
     LexLatte
     ParLatte
     PrintLatte
+    SATypes
+    SAUtils
+    StaticAnalysis
     -- Types
     -- TCTypes
     -- TCUtils

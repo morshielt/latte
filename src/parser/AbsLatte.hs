@@ -11,7 +11,14 @@ newtype Ident = Ident String deriving (Eq, Ord, Show, Read)
 data Program = Program [TopDef]
   deriving (Eq, Ord, Show, Read)
 
-data TopDef = FnDef Type Ident [Arg] Block
+data TopDef
+    = FnDef Type Ident [Arg] Block | ClDef Ident ClassExt [ClMember]
+  deriving (Eq, Ord, Show, Read)
+
+data ClassExt = NoExt | Ext Ident
+  deriving (Eq, Ord, Show, Read)
+
+data ClMember = Attr Type Ident | Meth Type Ident [Arg] Block
   deriving (Eq, Ord, Show, Read)
 
 data Arg = Arg Type Ident
@@ -24,29 +31,39 @@ data Stmt
     = Empty
     | BStmt Block
     | Decl Type [Item]
-    | Ass Ident Expr
-    | Incr Ident
-    | Decr Ident
+    | Ass Expr Expr
+    | Incr Expr
+    | Decr Expr
     | Ret Expr
     | VRet
     | Cond Expr Stmt
     | CondElse Expr Stmt Stmt
     | While Expr Stmt
     | SExp Expr
+    | For Type Ident Expr Stmt
   deriving (Eq, Ord, Show, Read)
 
 data Item = NoInit Ident | Init Ident Expr
   deriving (Eq, Ord, Show, Read)
 
-data Type = Array Type | Int | Str | Bool | Void | Fun Type [Type]
+data Type
+    = Arr Type | Cls Ident | Int | Str | Bool | Void | Fun Type [Type]
+  deriving (Eq, Ord, Show, Read)
+
+data ArrSize = ArrSize Expr | ClsNotArr
   deriving (Eq, Ord, Show, Read)
 
 data Expr
     = EVar Ident
+    | EAttrAcc Expr Ident
+    | EArrAcc Expr Expr
+    | EMethCall Expr Ident [Expr]
+    | ENew Type ArrSize
+    | EApp Ident [Expr]
+    | ECastNull Ident
     | ELitInt Integer
     | ELitTrue
     | ELitFalse
-    | EApp Ident [Expr]
     | EString String
     | Neg Expr
     | Not Expr

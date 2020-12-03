@@ -10,11 +10,11 @@ ClDef.     TopDef ::= "class" Ident ClassExt "{" [ClMember] "}" ;
 
 separator nonempty TopDef "" ;
 
-NoExt.  ClassExt ::= ;
+NoExt.     ClassExt ::= ;
 Ext.       ClassExt ::= "extends" Ident ;
 
-Field.     ClMember ::= Type Ident ";" ;
-Method.    ClMember ::= Type Ident "(" [Arg] ")" Block ;
+Attr.     ClMember ::= Type Ident ";" ;
+Meth.    ClMember ::= Type Ident "(" [Arg] ")" Block ;
 
 separator ClMember "";
 
@@ -24,46 +24,46 @@ separator  Arg "," ;
 
 -- statements ----------------------------------------------
 
-Block.     Block ::= "{" [Stmt] "}" ;
+Block.     Block ::= "{" [Stmt] "}" ; --X
 
 separator  Stmt "" ;
 
-Empty.     Stmt ::= ";" ;
+Empty.     Stmt ::= ";" ; --X
 
-BStmt.     Stmt ::= Block ;
+BStmt.     Stmt ::= Block ; --X
 
-Decl.      Stmt ::= Type [Item] ";" ;
+Decl.      Stmt ::= Type [Item] ";" ; --X
 
-NoInit.    Item ::= Ident ;
+NoInit.    Item ::= Ident ; --X
 
-Init.      Item ::= Ident "=" Expr ;
+Init.      Item ::= Ident "=" Expr ; --X
 
 separator nonempty Item "," ;
 
 Ass.       Stmt ::= Expr8 "=" Expr  ";" ;
 
-Incr.      Stmt ::= Ident "++"  ";" ;
+Incr.      Stmt ::= Expr8 "++"  ";" ; --X
 
-Decr.      Stmt ::= Ident "--"  ";" ;
+Decr.      Stmt ::= Expr8 "--"  ";" ; --X
 
 Ret.       Stmt ::= "return" Expr ";" ;
 
 VRet.      Stmt ::= "return" ";" ;
 
-Cond.      Stmt ::= "if" "(" Expr ")" Stmt  ;
+Cond.      Stmt ::= "if" "(" Expr ")" Stmt  ; --X
 
-CondElse.  Stmt ::= "if" "(" Expr ")" Stmt "else" Stmt  ;
+CondElse.  Stmt ::= "if" "(" Expr ")" Stmt "else" Stmt  ; --X
 
-While.     Stmt ::= "while" "(" Expr ")" Stmt ;
+While.     Stmt ::= "while" "(" Expr ")" Stmt ; --X
 
-SExp.      Stmt ::= Expr  ";" ;
+SExp.      Stmt ::= Expr  ";" ; --X
 
-For.       Stmt ::= "for" "(" Type Ident ":" Expr ")" Stmt ;
+For.       Stmt ::= "for" "(" Type Ident ":" Expr ")" Stmt ; --X
 
 -- Types ---------------------------------------------------
 Arr.       Type  ::= Type "[]" ;
 
-Obj.       Type ::= Ident ;
+Cls.       Type ::= Ident ;
 
 Int.       Type ::= "int" ;
 
@@ -80,28 +80,29 @@ separator  Type "," ;
 -- coercions  Type 1 ;
 
 
--- Expressions ---------------------------------------------
+-- expressions ---------------------------------------------
 
-EVar.          Expr8 ::= Ident ;
+-- assignables
+EVar.          Expr8 ::= Ident ; --X
 
 -- AttrAcc. AttrAccess ::= Expr7 "." Ident ;
 -- EAttrAccess.   Expr8 ::= AttrAccess ;
-EAttrAccess.   Expr8 ::= Expr7 "." Ident ;
+EAttrAcc.   Expr8 ::= Expr7 "." Ident ;
 
 -- ArrayElem.  ArrElemAccess ::= Expr7 "[" Expr "]" ;
 -- EArrAccess.    Expr8 ::= ArrElemAccess ;
-EArrAccess.    Expr8 ::= Expr7 "[" Expr "]" ;
+EArrAcc.    Expr8 ::= Expr7 "[" Expr "]" ;
 
 
-
+-- accessibles
 -- MCall.    MethodCall ::= Expr7 "." FunctionCall ;
 -- EMthCall.      Expr7 ::= MethodCall ;
-EMthCall.      Expr7 ::= Expr7 "." Ident "(" [Expr] ")" ;
+EMethCall.      Expr7 ::= Expr7 "." Ident "(" [Expr] ")" ;
 
-ENewArr.       Expr7 ::= "new" Type MaybeArr ;
+ENew.       Expr7 ::= "new" Type ArrSize ;
 
-IsArr.  MaybeArr ::= "[" Expr "]" ;
-NotArr.  MaybeArr ::= ;
+ArrSize.  ArrSize ::= "[" Expr "]" ;
+ClsNotArr.  ArrSize ::= ;
 
 
 -- ENew.          Expr7 ::= "new" Ident ;
@@ -111,7 +112,7 @@ NotArr.  MaybeArr ::= ;
 EApp.      Expr7 ::= Ident "(" [Expr] ")" ;
 
 
-
+-- lower level expressions
 ECastNull.     Expr6 ::= "(" Ident ")null";
 
 ELitInt.   Expr6 ::= Integer ;
@@ -124,7 +125,7 @@ ELitFalse. Expr6 ::= "false" ;
 
 EString.   Expr6 ::= String ;
 
-Neg.       Expr5 ::= "-" Expr6 ;
+Neg.       Expr5 ::= "-" Expr6 ; -- jeśli - -1 albo !!true ma się skompilować, to zmień Expr6 na Expr5 tu i niżej
 
 Not.       Expr5 ::= "!" Expr6 ;
 
