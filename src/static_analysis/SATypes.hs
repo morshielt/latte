@@ -19,7 +19,7 @@ type Scope = Integer
 type Types = M.Map Var (TCType, Scope)
 
 data ClassDef = ClassDef
-    { members :: Types -- attributes/methods
+    { members :: M.Map Var TCType -- attributes/methods
     , extends :: Maybe Var
     }  deriving Show
 
@@ -49,15 +49,19 @@ instance Show TCType where
 show' :: Show a => [a] -> String
 show' = intercalate ", " . map show
 
-typeToTCType :: Type -> TCType
-typeToTCType Str  = TString
-typeToTCType Int  = TInt
-typeToTCType Bool = TBool
-typeToTCType Void = TVoid
-typeToTCType cls@(Cls (Ident clsName)) = -- TODO: check czy to na pewno nic nie psuje
-    TDClass clsName
-typeToTCType (Arr type_   ) = TArr (typeToTCType type_)
-typeToTCType (Fun ret args) = TDFun (map typeToTCType args) (typeToTCType ret)
+typeToTCType :: Type -> TCM TCType
+typeToTCType Str                       = return TString
+typeToTCType Int                       = return TInt
+typeToTCType Bool                      = return TBool
+typeToTCType Void                      = return TVoid
+typeToTCType cls@(Cls (Ident clsName)) = do-- TODO: check czy to na pewno nic nie psuje
+    checkIfClassExists cls
+    return $ TDClass clsName
+typeToTCType (Arr type_   ) = TArr <$> typeToTCType type_
+typeToTCType (Fun ret args) = do
+    ret'  <- typeToTCType ret
+    args' <- mapM typeToTCType args
+    return $ TDFun args' ret'
 
 
 ----------------------------------------------------------------------
@@ -102,9 +106,9 @@ checkIfNameAlreadyInScope var = do
         (Just (_, s)) ->
             when (scope == s)
                 $  throwTCM
-                $  "Variable "
+                $  "`" -- TODO: better message - topdefs fns/classes arent variables
                 ++ var
-                ++ " already declared"
+                ++ "` already declared"
 
 throwTCM :: String -> TCM a
 throwTCM = lift . throwE

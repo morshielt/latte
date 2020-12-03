@@ -14,7 +14,7 @@ NoExt.     ClassExt ::= ;
 Ext.       ClassExt ::= "extends" Ident ;
 
 Attr.     ClMember ::= Type Ident ";" ;
-Meth.    ClMember ::= Type Ident "(" [Arg] ")" Block ;
+Meth.     ClMember ::= Type Ident "(" [Arg] ")" Block ;
 
 separator ClMember "";
 

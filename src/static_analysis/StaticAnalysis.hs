@@ -14,11 +14,13 @@ import           Control.Monad.Reader
 import           Control.Monad.Trans.Except
 
 import           Data.List                      ( intercalate )
-import           Data.Map                       ( Map
+import           Data.Map                      as M
+                                                ( Map
                                                 , union
                                                 , insert
                                                 , fromList
                                                 , empty
+                                                , lookup
                                                 )
 
 import           Control.Monad                  ( when )
@@ -29,59 +31,158 @@ import           Control.Monad                  ( when )
 
 -- TODO: for (int i : arr) i = 5; -- czy to w ogóle se można takie przypisania?
 
--- TODO:
--- Są dostępne predefiniowane funkcje:
--- void printInt(int)
--- void printString(string)
--- void error()
--- int readInt()
--- string readString()
-
 -- TODO: check if main present
 -- TODO: cykliczne `extends`
 -- TODO: do BStmt chyba potrzebuję jednak Reader monad?
 
-runStaticAnalysis (Program prog) = runReaderT (checkTopDefsM prog)
-    $ TCEnv empty empty 0 Nothing
+initScope = 0
+
+
+runStaticAnalysis (Program prog) = runReaderT (go prog)
+    $ TCEnv initialTypes M.empty initScope Nothing
   where
-    initialTypes :: Map Var (TCType, Scope)
-    initialTypes = empty
+    initialTypes :: M.Map Var (TCType, Scope)
+    initialTypes = M.fromList
+        [ ("printInt"   , (TDFun [TInt] TVoid, initScope))
+        , ("printString", (TDFun [TString] TVoid, initScope))
+        , ("error"      , (TDFun [] TVoid, initScope))
+        , ("readInt"    , (TDFun [] TInt, initScope))
+        , ("readString" , (TDFun [] TString, initScope))
+        ]
 
-    -- go prog = do
+    saveTopDefTypes :: TCEnv -> TopDef -> TCM TCEnv
+    saveTopDefTypes acc td =
+        local (const acc) $ handleTopDef td `throwExtraMsg` msg td
+      where
+        msg td e = ["function", e, " ", printTree td] -- TODO: BETTER MESSAGE + TODO: msg for 'print' 'error' etc.
+        handleTopDef :: TopDef -> TCM TCEnv
+        handleTopDef (ClDef (Ident clsName) classext clmembers) = do
+            clsDef <- getClassDef clsName
+            case clsDef of
+                Nothing -> do
+                    let extends = case classext of
+                            NoExt              -> Nothing
+                            Ext (Ident parent) -> Just parent
+                    env <- ask
+                    return $ env
+                        { classes = M.insert
+                                        clsName
+                                        (ClassDef { extends = extends
+                                                  , members = M.empty
+                                                  }
+                                        )
+                                        (classes env)
+                        }
+                _ -> throwTCM $ "Class `" ++ clsName ++ "` already declared"
 
-    --     checkTopDefsM prog
+        handleTopDef (FnDef ret (Ident name) args _) = do
+            checkIfNameAlreadyInScope name
+            t   <- typeToTCType $ Fun ret (map (\(Arg t _) -> t) args)
+            -- let
+            --     t = TDFun (map (\(Arg t _) -> typeToTCType t) args)
+            --         $ typeToTCType ret
+            env <- ask
+            return $ env { types = M.insert name (t, initScope) (types env) }
+
+    go :: [TopDef] -> TCM TCEnv
+    go prog = do
+        env   <- ask
+        env'  <- foldM saveTopDefTypes env prog
+        env'' <- local (const env') (checkClassDefsM prog)
+        local (const env'') (checkFnDefsM prog)
         -- checkReturns prog
-        -- get
 
 -- TODO: ^może nawet tu wyżej w runStaticAnalysis taki init mapy dać!!!
 -- TODO: ^jedno przejście po topdefach dodać tylko że dane funkcje/klasy istnieją, żeby potem w środku było, że są!!!
-checkTopDefsM :: [TopDef] -> TCM TCEnv
-checkTopDefsM ss = do
+checkClassDefsM :: [TopDef] -> TCM TCEnv
+checkClassDefsM ss = do
     env <- ask
     foldM go env ss
   where
     go :: TCEnv -> TopDef -> TCM TCEnv
-    go env' s = local (const env') $ checkTopDefM s
+    go env' s = local (const env') $ checkClassDefM s
 
--- checkTopDefsM :: [TopDef] -> TCM ()
--- checkTopDefsM []       = return ()
--- checkTopDefsM (s : ss) = do
---     checkTopDefM s
---     checkTopDefsM ss
---   where
---     go :: TCEnv -> TopDef -> TCM TCEnv
---     go env' s = local (const env') $ checkTopDefM s
+-- TODO: łapanie errorów w topdefach i jakieś ładniejsze message
+checkClassDefM :: TopDef -> TCM TCEnv
+checkClassDefM (FnDef ret (Ident name) args (Block stmts)) = ask
+checkClassDefM (ClDef (Ident ident) classext clmembers   ) = do
+    env  <- ask
+    env' <- foldM (go ident) env clmembers
+    -- foldM_ (go2 ident) env' clmembers
+    return $ env { classes = classes env' }
+  where
+    -- go2 :: Var -> TCEnv -> ClMember -> TCM TCEnv
+    -- go2 ident env1 cmem = local (const env1) $ checkMethods ident cmem
+    go :: Var -> TCEnv -> ClMember -> TCM TCEnv
+    go ident env1 cmem = local (const env1) $ handleClsMember ident cmem
 
-checkTopDefM :: TopDef -> TCM TCEnv
-checkTopDefM (FnDef ret (Ident name) args (Block stmts)) = do
-    checkIfNameAlreadyInScope name
+-- TODO: dodać atrybuty jako zmienne w tym scope
+-- TODO: sprawdzać czy nazwy memberów się nie powtarzają
+-- TODO: wywołanie funkcji zewnetrznej w memberze
+-- TODO: i uzupełnić memberów w mapie `classes`
+-- TODO: czy istnieje parent
+
+-- checkMethods :: Var -> ClMember -> TCM TCEnv
+-- checkMethods cls (Attr type_ (Ident ident)) = ask
+-- checkMethods cls (Meth ret (Ident ident) args _) = do
+
+
+handleClsMember :: Var -> ClMember -> TCM TCEnv
+handleClsMember cls (Attr type_ (Ident ident)) = do
+    env <- ask
+    case M.lookup cls $ classes env of
+        Nothing       -> throwTCM "IMPOSSIBLE ERROR TODO"
+        (Just clsDef) -> do
+            checkIfMemberExists (members clsDef) ident
+            t <- typeToTCType type_
+            let clsDef' =
+                    clsDef { members = M.insert ident t $ members clsDef }
+            let env' =
+                    env { types = M.insert ident (t, initScope) $ types env }
+            return $ env' { classes = M.insert cls clsDef' (classes env) }
+
+handleClsMember cls (Meth ret (Ident ident) args _) = do
+    env <- ask
+    case M.lookup cls $ classes env of
+        Nothing       -> throwTCM "IMPOSSIBLE ERROR TODO"
+        (Just clsDef) -> do
+            checkIfMemberExists (members clsDef) ident
+            t <- typeToTCType $ Fun ret (map (\(Arg t _) -> t) args)
+            let clsDef' =
+                    clsDef { members = M.insert ident t $ members clsDef }
+            return $ env { classes = M.insert cls clsDef' (classes env) }
+
+checkIfMemberExists :: M.Map Var TCType -> Var -> TCM ()
+checkIfMemberExists mmbrs name = case M.lookup name mmbrs of
+    Nothing -> return ()
+    _       -> throwTCM $ "member `" ++ name ++ "` already declared"
+
+
+checkFnDefsM :: [TopDef] -> TCM TCEnv
+checkFnDefsM ss = do
+    env <- ask
+    foldM go env ss
+  where
+    go :: TCEnv -> TopDef -> TCM TCEnv
+    go env' s = local (const env') $ checkFnDefM s
+
+checkFnDefM :: TopDef -> TCM TCEnv
+checkFnDefM (ClDef (Ident ident) classext clmembers   ) = ask
+checkFnDefM (FnDef ret (Ident name) args (Block stmts)) = do
+    -- TODO: dodać argumenty do enva przy sprawdzaniu funkcji
+    -- argsTypes <- handleArgs args
+    -- let fEnvWithArgs = fEnv { types       = argsTypes `union` types fEnv
+    --                         , expectedRet = Just (ret', name)
+    --                         }
+    -- local (const fEnvWithArgs) $ checkStmtM (BStmt bs)
+
     checkStmtsM stmts
     -- let ret' = typeToTCType ret
     -- scope <- gets scope
     -- env   <- get
 
     -- let t    = TFun (map argToTCArg args) ret'
-    -- let fEnv = env { types = insert name (t, scope) (types env) }
+    -- let fEnv = env { types = M.insert name (t, scope) (types env) }
 
     -- argsTypes <- handleArgs args `throwExtraMsg` msg
     -- let fEnvWithArgs = fEnv { types       = argsTypes `union` types fEnv
@@ -91,7 +192,7 @@ checkTopDefM (FnDef ret (Ident name) args (Block stmts)) = do
 
 --     ask
 
-checkTopDefM (ClDef (Ident ident) classext clmembers) = undefined
+
 
 --- STMTS -----------------------------------------------------------------
 
@@ -120,7 +221,9 @@ checkStmtM (Decl t ds) = do
     foldM go env ds
   where
     go :: TCEnv -> Item -> TCM TCEnv
-    go acc d = local (const acc) $ handleDecl (typeToTCType t) d
+    go acc d = do
+        t' <- typeToTCType t
+        local (const acc) $ handleDecl t' d
 
     handleDecl :: TCType -> Item -> TCM TCEnv
     handleDecl t d = do
@@ -135,7 +238,7 @@ checkStmtM (Decl t ds) = do
 
         scope <- asks scope
         env   <- ask
-        let envWithDecl = insert var (t, scope) (types env)
+        let envWithDecl = M.insert var (t, scope) (types env)
         return $ env { types = envWithDecl }
 
 checkStmtM (BStmt (Block ss)) = do
@@ -180,11 +283,11 @@ checkStmtM stmt@(CondElse e s1 s2) = do
 checkStmtM (For type_ (Ident iter) arr stmt) = do
     checkIfClassExists type_
     (TArr t) <- matchExpType undefinedArrType arr
-    matchType [t] (typeToTCType type_)
+    typeToTCType type_ >>= matchType [t]
 
     s   <- asks scope
     env <- ask
-    let typesWithIter = insert iter (t, s + 1) (types env)
+    let typesWithIter = M.insert iter (t, s + 1) (types env)
     case stmt of
         (BStmt ss) ->
             local (\env -> env { types = typesWithIter }) (checkStmtM stmt)
@@ -266,7 +369,7 @@ checkExprM (ENew cls@(Cls (Ident clsName)) ClsNotArr) = do
 checkExprM (ENew type_ (ArrSize sizeExpr)) = do
     checkIfClassExists type_ -- doesn't have to be a class, that's ok
     matchExpType TInt sizeExpr
-    return $ TArr $ typeToTCType type_
+    TArr <$> typeToTCType type_
 checkExprM e@(ENew _ _) = throwMsg ["Illegal `new` expression: ", printTree e]
 checkExprM (EAttrAcc expr ident) = undefined
 -- TODO: jak się odwołuję poza tablicę, ale to raczej już później, bo w typechecku chyba nie mogę?
