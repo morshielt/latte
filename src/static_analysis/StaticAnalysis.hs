@@ -41,11 +41,15 @@ import           Control.Monad                  ( when )
 -- TODO: cykliczne `extends`
 -- TODO: do BStmt chyba potrzebuję jednak Reader monad?
 
-runStaticAnalysis (Program prog) =
-    runReaderT (checkTopDefsM prog) $ TCEnv empty empty 0 Nothing
---   where
---     go prog = do
---         checkTopDefsM prog
+runStaticAnalysis (Program prog) = runReaderT (checkTopDefsM prog)
+    $ TCEnv empty empty 0 Nothing
+  where
+    initialTypes :: Map Var (TCType, Scope)
+    initialTypes = empty
+
+    -- go prog = do
+
+    --     checkTopDefsM prog
         -- checkReturns prog
         -- get
 
@@ -101,14 +105,6 @@ checkStmtsM ss = do
     -- mogę ew rozdzielić tę wywoływaną z bloku na inną funkcję albo dać jakąs flagę, się zobaczy
     go env' s = local (const env') $ checkStmtM s `throwExtraMsg` msg
         where msg e = [e, "in statement:", printTree s]
-
-
-
--- checkStmtsM :: [Stmt] -> TCM TCEnv
--- checkStmtsM []       = ask
--- checkStmtsM (s : ss) = do
---     checkStmtM s
---     checkStmtsM ss
 
 checkStmtM :: Stmt -> TCM TCEnv
 checkStmtM Empty    = ask
@@ -255,13 +251,13 @@ checkExprM e@(EAdd e1 Minus e2)  = checkBinOp [TInt] e1 e2
 
 -- TODO: czy ma być EQU/NE na obiektach i tablicach? chyba nie nie? plz no
 checkExprM e@(ERel e1 EQU e2) =
-    checkBinOp [TInt, TString, TBool] e1 e2 e >> return TBool
+    checkBinOp [TInt, TString, TBool] e1 e2 >> return TBool
 checkExprM e@(ERel e1 NE e2) =
-    checkBinOp [TInt, TString, TBool] e1 e2 e >> return TBool
+    checkBinOp [TInt, TString, TBool] e1 e2 >> return TBool
 
-checkExprM e@(ERel e1 _ e2) = checkBinOp [TInt] e1 e2 e >> return TBool
-checkExprM e@(EAnd e1 e2) = checkBinOp [TBool] e1 e2 e
-checkExprM e@(EOr e1 e2) = checkBinOp [TBool] e1 e2 e
+checkExprM e@(ERel e1 _ e2) = checkBinOp [TInt] e1 e2 >> return TBool
+checkExprM e@(EAnd e1 e2) = checkBinOp [TBool] e1 e2
+checkExprM e@(EOr e1 e2) = checkBinOp [TBool] e1 e2
 
 
 checkExprM (ENew cls@(Cls (Ident clsName)) ClsNotArr) = do
