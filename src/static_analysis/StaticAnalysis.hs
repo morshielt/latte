@@ -36,6 +36,12 @@ import           Control.Monad                  ( when )
 -- TODO: cykliczne `extends`
 -- TODO : do BStmt chyba potrzebuję jednak Reader monad? tak jest.
 
+-- TODO: KLASY BADZIEWNE MENDY
+-- TODO:  EMethCall EAttrAcc: muszą ogarniać, że z nadklas można mieć atr/met
+-- TODO:  Decl Ass: można przypisywać na zmienną typu nadklasy elem typu podklasy
+-- TODO: że atrybuty w podkl/nadkl się nie powtarzają, a metody mogą, jeśli mają zgodne typy
+
+
 initScope = 0
 
 
@@ -109,19 +115,36 @@ checkClassDefM (FnDef ret (Ident name) args (Block stmts)) = ask
 checkClassDefM (ClDef (Ident ident) classext clmembers   ) = do
     env <- ask
 -- TODO : czy istnieje parent TODO: ładny message, że nie istenieje
+-- TODO: cykliczne extends
     case classext of
-        NoExt       -> return ()
-        (Ext ident) -> checkIfClassExists (Cls ident)
+        NoExt                  -> ask
+        (Ext p@(Ident parent)) -> do
+            checkIfClassExists (Cls p)
+            checkExtends parent
 -- TODO : dodać atrybuty jako zmienne w tym scope
     env' <- foldM (go ident) env clmembers
     foldM_ (go2 ident) env' clmembers
 -- TODO : i uzupełnić memberów w mapie `classes`
     return $ env { classes = classes env' }
   where
-    go2 :: Var -> TCEnv -> ClMember -> TCM TCEnv
-    go2 ident env1 cmem = local (const env1) $ checkMethods ident cmem
     go :: Var -> TCEnv -> ClMember -> TCM TCEnv
     go ident env1 cmem = local (const env1) $ handleClsMember ident cmem
+    go2 :: Var -> TCEnv -> ClMember -> TCM TCEnv
+    go2 ident env1 cmem = local (const env1) $ checkMethods ident cmem
+
+    checkExtends :: Var -> TCM TCEnv
+    checkExtends cls = checkIfExtendsAcyclic [cls] cls
+
+    checkIfExtendsAcyclic :: [Var] -> Var -> TCM TCEnv
+    checkIfExtendsAcyclic visited cls = do
+        maybeParent <- getClassParent cls
+        case maybeParent of
+            Nothing       -> ask
+            (Just parent) -> if parent `elem` visited
+                then
+                    throwTCM $ "CYCLIC CLASS EXTENDS TODO msg: " ++ show visited
+                else checkIfExtendsAcyclic (parent : visited) parent
+
 
 
 -- TODO: wywołanie funkcji zewnetrznej w memberze
@@ -135,7 +158,9 @@ checkMethods cls (Meth ret (Ident ident) args bs) = do
     argsTypes <- handleArgs args
     let
         env' = env
-            { types       = argsTypes `union` types env
+            { types       = M.insert "self" (TDClass cls, scope env + 1)
+                            $       argsTypes
+                            `union` types env
             , expectedRet =
                 Just (ret', "class `" ++ cls ++ "` method `" ++ ident ++ "`")
             }
@@ -162,7 +187,7 @@ handleClsMember :: Var -> ClMember -> TCM TCEnv
 handleClsMember cls (Attr type_ (Ident ident)) = do
     env <- ask
     case M.lookup cls $ classes env of
-        Nothing       -> throwTCM "IMPOSSIBLE ERROR TODO"
+        Nothing       -> throwTCM "1IMPOSSIBLE ERROR TODO"
         (Just clsDef) -> do
             checkIfMemberExists (members clsDef) ident
             t <- typeToTCType type_
@@ -177,7 +202,7 @@ handleClsMember cls (Attr type_ (Ident ident)) = do
 handleClsMember cls (Meth ret (Ident ident) args _) = do
     env <- ask
     case M.lookup cls $ classes env of
-        Nothing       -> throwTCM "IMPOSSIBLE ERROR TODO"
+        Nothing       -> throwTCM "2IMPOSSIBLE ERROR TODO"
         (Just clsDef) -> do
             checkIfMemberExists (members clsDef) ident
             t <- typeToTCType $ Fun ret (map (\(Arg t _) -> t) args)
@@ -253,7 +278,9 @@ checkStmtM (Decl t ds) = do
                 -- (TDFun _ _) -> throwMsg
                 --     [var, ": Default function declaration is forbidden"]
                 -- _ -> return var
-            (Init (Ident var) e) -> matchExpType t e >> return var -- TODO: czy dla klas to wystarcza?
+            (Init (Ident var) e) -> case t of
+                (TDClass cls) -> matchParentClasses cls e >> return var
+                _             -> matchExpType t e >> return var -- TODO: czy dla klas to wystarcza?
         checkIfNameAlreadyInScope var
 
         scope <- asks scope
@@ -269,8 +296,12 @@ checkStmtM (BStmt (Block ss)) = do
 
 checkStmtM (Ass assignable e) = do
     t <- checkExprM assignable
-    matchExpType t e
-    ask
+    case t of
+        (TDClass cls) -> matchParentClasses cls e
+        _             -> do
+            matchExpType t e
+            ask
+
 -- checkStmtM (Ass assignable e) = do
 --     case assignable of
 --         (EVar (Ident var)) -> do
@@ -319,8 +350,6 @@ checkStmtM (For type_ (Ident iter) arr stmt) = do
                    (checkStmtM stmt)
     ask
 
-
-
 -- unchecked BEGIN
 -- TODO: po ogarnięciu FnDef TopDefów
 checkStmtM VRet    = matchReturn TVoid
@@ -335,6 +364,29 @@ matchReturn t = do
     ask
     where msg name e = [name, ":", e, "in function return"]
 -- unchecked END
+
+matchParentClasses :: Var -> Expr -> TCM TCEnv
+matchParentClasses clsParent e = do
+    t2 <- checkExprM e
+    case t2 of
+        (TDClass cls) -> do
+            compatibles <- getCompatibleClasses cls
+            if clsParent `notElem` compatibles
+                then
+                    throwTCM
+                        "TODO msg incompatible types (incompatible unrelated classes)"
+                else ask
+        _ -> throwTCM "TODO msg incompatible types (expected class got sth)"
+  where
+    getCompatibleClasses :: Var -> TCM [Var]
+    getCompatibleClasses cls = getCompatibles [cls] cls
+    getCompatibles :: [Var] -> Var -> TCM [Var]
+    getCompatibles compatible cls = do
+        p <- getClassParent cls
+        case p of
+            Nothing       -> return compatible
+            (Just parent) -> getCompatibles (parent : compatible) parent
+
 
 checkIncrDecr :: Expr -> TCM TCEnv
 checkIncrDecr assignable = do
@@ -375,11 +427,11 @@ checkExprM e@(EMul e1 _     e2)  = checkBinOp [TInt] e1 e2
 checkExprM e@(EAdd e1 Plus  e2)  = checkBinOp [TInt, TString] e1 e2
 checkExprM e@(EAdd e1 Minus e2)  = checkBinOp [TInt] e1 e2
 
--- TODO: czy ma być EQU/NE na obiektach i tablicach? chyba nie nie? plz no
+-- TODO: czy ma być EQU/NE na obiektach i tablicach? z nullem ma być
 checkExprM e@(ERel e1 EQU e2) =
-    checkBinOp [TInt, TString, TBool] e1 e2 >> return TBool
+    checkBinOp [TInt, TString, TBool, wildcardClass] e1 e2 >> return TBool
 checkExprM e@(ERel e1 NE e2) =
-    checkBinOp [TInt, TString, TBool] e1 e2 >> return TBool
+    checkBinOp [TInt, TString, TBool, wildcardClass] e1 e2 >> return TBool
 
 checkExprM e@(ERel e1 _ e2) = checkBinOp [TInt] e1 e2 >> return TBool
 checkExprM e@(EAnd e1 e2) = checkBinOp [TBool] e1 e2
@@ -399,28 +451,40 @@ checkExprM (EArrAcc expr1 expr2) = do
     (TArr act) <- matchExpType undefinedArrType expr1
     matchExpType TInt expr2
     return act
-checkExprM (EAttrAcc expr (Ident ident)) = do
-    (TDClass clsName) <- matchExpType wildcardClass expr -- TODO: nigdy się teoretycznie nie powinno wywalić, bo matchExpType rzuca jc
-    classes           <- asks classes
-    case M.lookup clsName classes of
-        Nothing       -> throwTCM "IMPOSSIBLE ERROR, IT HAS TO EXIST"
-        (Just clsDef) -> case M.lookup ident (members clsDef) of
-            Nothing -> throwTCM "NO such attribute TODO msg"
-            (Just (TDFun _ _)) ->
-                throwTCM "It's a method not an attribute TODO msg"
-            (Just t) -> return t
+checkExprM (EAttrAcc expr (Ident ident))
+    | ident == "length" = do
+        type_ <- matchExpType undefinedArrType expr
+        case type_ of
+            -- TODO : .length na tablicy!!!
+            (TArr _) -> return TInt
+            _        -> checkEAttrAcc
+    | otherwise = checkEAttrAcc
+  where
+    checkEAttrAcc = do
+        (TDClass clsName) <- matchExpType wildcardClass expr -- TODO: nigdy się teoretycznie nie powinno wywalić, bo matchExpType rzuca jc
+        classes           <- asks classes
+        case M.lookup clsName classes of
+            Nothing       -> throwTCM "3IMPOSSIBLE ERROR, IT HAS TO EXIST"
+            (Just clsDef) -> case M.lookup ident (members clsDef) of
+                Nothing -> throwTCM "NO such attribute TODO msg"
+                (Just (TDFun _ _)) ->
+                    throwTCM "It's a method not an attribute TODO msg"
+                (Just t) -> return t
 
-checkExprM (EMethCall expr (Ident ident) es) = do
+checkExprM e@(EMethCall expr (Ident ident) es) = do
     (TDClass clsName) <- matchExpType wildcardClass expr -- TODO: nigdy się teoretycznie nie powinno wywalić, bo matchExpType rzuca jc
-    classes           <- asks classes
-    case M.lookup clsName classes of
-        Nothing       -> throwTCM "IMPOSSIBLE ERROR, IT HAS TO EXIST"
-        (Just clsDef) -> case M.lookup ident (members clsDef) of
-            Nothing                 -> throwTCM "NO such method TODO msg"
-            (Just (TDFun args ret)) -> do
-                checkArgs args es
-                return ret
-            (Just t) -> throwTCM "It's an attribute not a method TODO msg"
+    matchMethod clsName
+  where
+    matchMethod clsName = do
+        classes <- asks classes
+        case M.lookup clsName classes of
+            Nothing       -> throwTCM "4IMPOSSIBLE ERROR, IT HAS TO EXIST"
+            (Just clsDef) -> case M.lookup ident (members clsDef) of
+                Nothing                 -> throwTCM "NO such method TODO msg"
+                (Just (TDFun args ret)) -> do
+                    checkArgs args es
+                    return ret
+                (Just t) -> throwTCM "It's an attribute not a method TODO msg"
 
 checkExprM (EApp (Ident var) es) = do
     typeScope <- getVarTypeScope var
@@ -476,6 +540,12 @@ matchExpType ex e
 checkBinOp :: [TCType] -> Expr -> Expr -> TCM TCType
 checkBinOp ts e1 e2 = do
     e1T <- checkExprM e1
+    -- case e1T of
+    --     cls@(TDClass clsName) -> do
+    --         if wildcardClass `notElem` ts
+    --             then throwTCM ""
+    --             else matchType [cls] =<< checkExprM e2
+
     matchType ts e1T
     matchType [e1T] =<< checkExprM e2
     return e1T
@@ -485,5 +555,7 @@ checkBinOp ts e1 e2 = do
 matchType :: [TCType] -> TCType -> TCM ()
 matchType [ex] act = when (ex /= act)
     $ throwMsg ["Expected type:", show ex, "\nActual type:", show act]
+matchType exs cls@(TDClass _) = when (wildcardClass `notElem` exs) $ throwMsg
+    ["Expected one of types:", show' exs, "\nActual type:", show cls]
 matchType exs act = when (act `notElem` exs) $ throwMsg
     ["Expected one of types:", show' exs, "\nActual type:", show act]

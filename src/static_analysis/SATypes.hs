@@ -46,7 +46,7 @@ instance Show TCType where
     show TBool             = "bool"
     show TVoid             = "void"
     show (TArr    type_  ) = show type_ ++ "[]"
-    show (TDClass clsName) = clsName
+    show (TDClass clsName) = "class `" ++ clsName ++ "`"-- TODO: czy wypisywać `class`?
     show (TDFun args ret ) = "(" ++ show' args ++ ") -> " ++ show ret
 
 show' :: Show a => [a] -> String
@@ -78,6 +78,14 @@ checkIfClassExists (Cls (Ident var)) = do
         _       -> return ()
 checkIfClassExists (Arr t) = checkIfClassExists t
 checkIfClassExists _       = return ()
+
+getClassParent :: Var -> TCM (Maybe Var)
+getClassParent cls = do
+    checkIfClassExists (Cls (Ident cls)) --TODO: UGLY 
+    clss <- asks classes
+    case M.lookup cls clss of
+        Nothing       -> throwTCM "getClassParent:IMPOSSIBLE ERROR TODO"
+        (Just clsDef) -> return $ extends clsDef
 
 getClassDef :: Var -> TCM (Maybe ClassDef)
 getClassDef var = do
