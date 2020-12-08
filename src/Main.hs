@@ -107,8 +107,8 @@ check s = case pProgram (myLexer s) of
         hPutStrLn stderr $ "[Syntax error] " ++ err
         exitFailure
     Ok tree -> do
-        putStrLn "\nParse Successful!"
-        showTree tree
+        -- putStrLn "\nParse Successful!"
+        -- showTree tree
         tcRes <- runExceptT $ runStaticAnalysis tree
         case tcRes of
             Left e -> do

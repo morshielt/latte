@@ -58,7 +58,7 @@ typeToTCType Int                       = return TInt
 typeToTCType Bool                      = return TBool
 typeToTCType Void                      = return TVoid
 typeToTCType cls@(Cls (Ident clsName)) = do-- TODO: check czy to na pewno nic nie psuje
-    checkIfClassExists cls
+    checkIfClassExistsT cls
     return $ TDClass clsName
 typeToTCType (Arr type_) = TArr <$> typeToTCType type_
 typeToTCType (Fun ret args) =
@@ -67,21 +67,21 @@ typeToTCType (Fun ret args) =
 
 ----------------------------------------------------------------------
 
-
-
-
-checkIfClassExists :: Type -> TCM ()
-checkIfClassExists (Cls (Ident var)) = do
+checkIfClassExists :: Var -> TCM ()
+checkIfClassExists var = do
     clsDef <- getClassDef var
     case clsDef of
         Nothing -> throwTCM $ "No such class named `" ++ var ++ "` declared"
         _       -> return ()
-checkIfClassExists (Arr t) = checkIfClassExists t
-checkIfClassExists _       = return ()
+
+checkIfClassExistsT :: Type -> TCM ()
+checkIfClassExistsT (Cls (Ident var)) = checkIfClassExists var
+checkIfClassExistsT (Arr t          ) = checkIfClassExistsT t
+checkIfClassExistsT _                 = return ()
 
 getClassParent :: Var -> TCM (Maybe Var)
 getClassParent cls = do
-    checkIfClassExists (Cls (Ident cls)) --TODO: UGLY 
+    checkIfClassExistsT (Cls (Ident cls)) --TODO: UGLY 
     clss <- asks classes
     case M.lookup cls clss of
         Nothing       -> throwTCM "getClassParent:IMPOSSIBLE ERROR TODO"

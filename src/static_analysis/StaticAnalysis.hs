@@ -11,6 +11,7 @@ import           SAUtils
 import           PrintLatte
 
 import           Control.Monad.Reader
+import           Control.Monad.State
 import           Control.Monad.Trans.Except
 
 import           Data.List                      ( intercalate )
@@ -21,6 +22,12 @@ import           Data.Map                      as M
                                                 , fromList
                                                 , empty
                                                 , lookup
+                                                , adjust
+                                                , null
+                                                , delete
+                                                , partition
+                                                , toList
+                                                , showTree
                                                 )
 
 import           Control.Monad                  ( when )
@@ -57,6 +64,103 @@ runStaticAnalysis (Program prog) = runReaderT (go prog)
         , ("readString" , (TDFun [] TString, initScope))
         ]
 
+    go :: [TopDef] -> TCM TCEnv
+    go prog = do
+        env <- ask
+
+        let (fnsTDs, classesTDs) = splitTDs prog
+        env'   <- foldM saveTopDefTypes env prog
+
+        -- mappu <- clsDefToMapEntries classesTDs
+        -- let (bottomClasses, mappu') = partition (\(i, _, _) -> i == 0) mappu
+        -- let bottomClasses' = map (\(k, (_, par, tdef)) -> (k, par, tdef))
+        --         $ toList bottomClasses
+        -- liftIO $ putStrLn $ showTree mappu'
+        -- liftIO $ putStrLn $ show bottomClasses'
+        -- topoOrderClasses <- topSort mappu' bottomClasses' []
+        env''  <- local (const env') (saveClassMembers classesTDs) -- TODO: do in correct order!
+        env''' <- local (const env'') (checkClassDefsM classesTDs) -- TODO: do in correct order!
+        -- env'' <- local (const env') (checkClassDefsM prog) -- TODO: do in correct order!
+
+        -- checkReturns prog
+        local (const env''') (checkFnDefsM prog)
+      where
+        countExtends
+            :: [TopDef]
+            -> Map Var (Integer, Maybe Var, TopDef)
+            -> TCM (Map Var (Integer, Maybe Var, TopDef))
+        countExtends [] mappu = return mappu
+        countExtends (tdef@(ClDef _ NoExt _) : tds) mappu =
+            countExtends tds mappu
+        countExtends (tdef@(ClDef _ (Ext (Ident parent)) _) : tds) mappu =
+            case M.lookup parent mappu of
+                Nothing ->
+                    throwTCM $ "No such class named `" ++ parent ++ "` declared"
+                _ -> countExtends tds $ adjust incrInMap parent mappu
+        clsDefToMapEntries
+            :: [TopDef] -> TCM (Map Var (Integer, Maybe Var, TopDef))
+        clsDefToMapEntries tds =
+            clsDefToMapEntries' tds [] >>= countExtends tds
+        clsDefToMapEntries'
+            :: [TopDef]
+            -> [(Var, (Integer, Maybe Var, TopDef))]
+            -> TCM (Map Var (Integer, Maybe Var, TopDef))
+        clsDefToMapEntries' [] l = return $ M.fromList l
+        clsDefToMapEntries' (tdef@(ClDef (Ident clsName) (Ext (Ident parent)) clmembers) : tds) l
+            = clsDefToMapEntries' tds ((clsName, (0, Just parent, tdef)) : l)
+        clsDefToMapEntries' (tdef@(ClDef (Ident clsName) NoExt clmembers) : tds) l
+            = clsDefToMapEntries' tds ((clsName, (0, Nothing, tdef)) : l)
+
+        splitTDs :: [TopDef] -> ([TopDef], [TopDef])
+        splitTDs prog = splitTDs2 prog [] []
+        splitTDs2 :: [TopDef] -> [TopDef] -> [TopDef] -> ([TopDef], [TopDef])
+        splitTDs2 (f@FnDef{} : tds) fns clss = splitTDs2 tds (f : fns) clss
+        splitTDs2 (c@ClDef{} : tds) fns clss = splitTDs2 tds fns (c : clss)
+        -- splitTDs2 []                fns clss = (fns, topoSort clss)
+        splitTDs2 []                fns clss = (fns, clss)
+
+        topSort
+            :: Map Var (Integer, Maybe Var, TopDef)
+            -> [(Var, Maybe Var, TopDef)]
+            -> [TopDef]
+            -> TCM [TopDef]
+        topSort graph [] l
+            | M.null graph = return l
+            | otherwise    = throwTCM "Cyclic class inheritance TODO msg"
+        topSort graph ((curr, Nothing, td) : ss) l = topSort graph ss (td : l)
+        topSort graph ((curr, Just parent, td) : ss) l = do
+            let graph' = adjust decrInMap parent graph
+            case M.lookup parent graph' of
+                Just (ctr, ppar, def) -> if ctr == 0
+                    then topSort (delete parent graph')
+                                 ((parent, ppar, def) : ss)
+                                 (td : l)
+                    else topSort graph' ss (td : l)
+                Nothing -> throwTCM "How could that even be possible TODO msg"
+
+        incrInMap, decrInMap
+            :: (Integer, Maybe Var, TopDef) -> (Integer, Maybe Var, TopDef)
+        decrInMap (i, par, def) = (i - 1, par, def)
+        incrInMap (i, par, def) = (i + 1, par, def)
+
+
+-- L ← Empty list that will contain the sorted elements
+-- S ← Set of all nodes with no incoming edge
+
+-- while S is not empty do
+--     remove a node n from S
+--     add n to L
+--     for each node m with an edge e from n to m do
+--         remove edge e from the graph
+--         if m has no other incoming edges then
+--             insert m into S
+
+-- if graph has edges then
+--     return error   (graph has at least one cycle)
+-- else 
+--     return L   (a topologically sorted order)
+
+
     saveTopDefTypes :: TCEnv -> TopDef -> TCM TCEnv
     saveTopDefTypes acc td =
         local (const acc) $ handleTopDef td `throwExtraMsg` msg td
@@ -91,16 +195,9 @@ runStaticAnalysis (Program prog) = runReaderT (go prog)
             env <- ask
             return $ env { types = M.insert name (t, initScope) (types env) }
 
-    go :: [TopDef] -> TCM TCEnv
-    go prog = do
-        env   <- ask
-        env'  <- foldM saveTopDefTypes env prog
-        env'' <- local (const env') (checkClassDefsM prog)
-        local (const env'') (checkFnDefsM prog)
-        -- checkReturns prog
-
 -- TODO: ^może nawet tu wyżej w runStaticAnalysis taki init mapy dać!!!
 -- TODO: ^jedno przejście po topdefach dodać tylko że dane funkcje/klasy istnieją, żeby potem w środku było, że są!!!
+
 checkClassDefsM :: [TopDef] -> TCM TCEnv
 checkClassDefsM ss = do
     env <- ask
@@ -109,51 +206,151 @@ checkClassDefsM ss = do
     go :: TCEnv -> TopDef -> TCM TCEnv
     go env' s = local (const env') $ checkClassDefM s
 
+
+saveClassMembers :: [TopDef] -> TCM TCEnv
+saveClassMembers ss = do
+    env <- ask
+    foldM go env ss
+  where
+    go :: TCEnv -> TopDef -> TCM TCEnv
+    go env' s = local (const env') $ saveClassMember s
+
+saveClassMember :: TopDef -> TCM TCEnv
+saveClassMember (FnDef ret (Ident name) args (Block stmts)) = ask
+saveClassMember (ClDef (Ident ident) classext clmembers   ) = do
+    env  <- ask
+    env' <- foldM (go ident) env clmembers
+    return $ env { classes = classes env' }
+  where
+    go :: Var -> TCEnv -> ClMember -> TCM TCEnv
+    go ident env1 cmem = local (const env1) $ saveClsMember ident cmem
+
+    saveClsMember :: Var -> ClMember -> TCM TCEnv
+    saveClsMember cls (Attr type_ (Ident ident)) = do
+        env <- ask
+        case M.lookup cls $ classes env of
+            Nothing       -> throwTCM "1IMPOSSIBLE ERROR TODO"
+            (Just clsDef) -> do
+                checkIfMemberExists (members clsDef) ident
+                t <- typeToTCType type_
+                let clsDef' = clsDef
+                        { members = M.insert ident t $ members clsDef
+                        }
+                return $ env { classes = M.insert cls clsDef' (classes env) }
+
+    saveClsMember cls (Meth ret (Ident ident) args _) = do
+        env <- ask
+        case M.lookup cls $ classes env of
+            Nothing       -> throwTCM "2IMPOSSIBLE ERROR TODO"
+            (Just clsDef) -> do
+                checkIfMemberExists (members clsDef) ident
+                t <- typeToTCType $ Fun ret (map (\(Arg t _) -> t) args)
+                let clsDef' = clsDef
+                        { members = M.insert ident t $ members clsDef
+                        }
+                return $ env { classes = M.insert cls clsDef' (classes env) }
+
+
+checkIfMemberExists :: M.Map Var TCType -> Var -> TCM ()
+checkIfMemberExists mmbrs name = case M.lookup name mmbrs of
+    Nothing -> return ()
+    _       -> throwTCM $ "member `" ++ name ++ "` already declared"
+
+
+
 -- TODO: łapanie errorów w topdefach i jakieś ładniejsze message
 checkClassDefM :: TopDef -> TCM TCEnv
 checkClassDefM (FnDef ret (Ident name) args (Block stmts)) = ask
 checkClassDefM (ClDef (Ident ident) classext clmembers   ) = do
-    env <- ask
+    env  <- ask
 -- TODO : czy istnieje parent TODO: ładny message, że nie istenieje
 -- TODO: cykliczne extends
-    case classext of
-        NoExt                  -> ask
-        (Ext p@(Ident parent)) -> do
-            checkIfClassExists (Cls p)
-            checkExtends parent
+    -- case classext of
+    --     NoExt                  -> ask
+    --     (Ext p@(Ident parent)) -> do
+    --         checkIfClassExistsT (Cls p)
+    --         checkExtends parent
 -- TODO : dodać atrybuty jako zmienne w tym scope
     env' <- foldM (go ident) env clmembers
     foldM_ (go2 ident) env' clmembers
 -- TODO : i uzupełnić memberów w mapie `classes`
-    return $ env { classes = classes env' }
+    -- return $ env { classes = classes env' }
+    ask
   where
     go :: Var -> TCEnv -> ClMember -> TCM TCEnv
     go ident env1 cmem = local (const env1) $ handleClsMember ident cmem
     go2 :: Var -> TCEnv -> ClMember -> TCM TCEnv
     go2 ident env1 cmem = local (const env1) $ checkMethods ident cmem
 
-    checkExtends :: Var -> TCM TCEnv
-    checkExtends cls = checkIfExtendsAcyclic [cls] cls
+    -- checkExtends :: Var -> TCM TCEnv
+    -- checkExtends cls = checkIfExtendsAcyclic [cls] cls
 
-    checkIfExtendsAcyclic :: [Var] -> Var -> TCM TCEnv
-    checkIfExtendsAcyclic visited cls = do
-        maybeParent <- getClassParent cls
-        case maybeParent of
-            Nothing       -> ask
-            (Just parent) -> if parent `elem` visited
-                then
-                    throwTCM $ "CYCLIC CLASS EXTENDS TODO msg: " ++ show visited
-                else checkIfExtendsAcyclic (parent : visited) parent
+    -- checkIfExtendsAcyclic :: [Var] -> Var -> TCM TCEnv
+    -- checkIfExtendsAcyclic visited cls = do
+    --     maybeParent <- getClassParent cls
+    --     case maybeParent of
+    --         Nothing       -> ask
+    --         (Just parent) -> if parent `elem` visited
+    --             then
+    --                 throwTCM $ "CYCLIC CLASS EXTENDS TODO msg: " ++ show visited
+    --             else checkIfExtendsAcyclic (parent : visited) parent
 
+handleClsMember :: Var -> ClMember -> TCM TCEnv
+handleClsMember cls (Attr type_ (Ident ident)) = do
+    env <- ask
+    case M.lookup cls $ classes env of
+        Nothing       -> throwTCM "1IMPOSSIBLE ERROR TODO"
+        (Just clsDef) -> do
+            -- checkIfMemberExists (members clsDef) ident
+            t <- typeToTCType type_
+            -- let clsDef' =
+            --         clsDef { members = M.insert ident t $ members clsDef }
+            let
+                env' = env
+                    { types = M.insert ident (t, initScope + 1) $ types env
+                    } -- TODO: initScope + 1, gurl, zgubisz się (pewnie już się zgubiłaś, ciiiii)
+            return env' --{ classes = M.insert cls clsDef' (classes env) }
+
+handleClsMember cls (Meth ret (Ident ident) args _) = ask
+    -- do
+    -- env <- ask
+    -- case M.lookup cls $ classes env of
+    --     Nothing       -> throwTCM "2IMPOSSIBLE ERROR TODO"
+    --     (Just clsDef) -> do
+    --         -- checkIfMemberExists (members clsDef) ident
+    --         t <- typeToTCType $ Fun ret (map (\(Arg t _) -> t) args)
+    --         -- let clsDef' =
+    --                 -- clsDef { members = M.insert ident t $ members clsDef }
+    --         return env --{ classes = M.insert cls clsDef' (classes env) }
 
 
 -- TODO: wywołanie funkcji zewnetrznej w memberze
 -- FACT: nie ma rekurencyjnego wywoływania metod TODO: czy musi być?
 checkMethods :: Var -> ClMember -> TCM TCEnv
-checkMethods cls (Attr type_ (Ident ident)      ) = ask
-checkMethods cls (Meth ret (Ident ident) args bs) = do
+checkMethods cls (  Attr type_ (Ident ident)      ) = ask
+checkMethods cls x@(Meth ret (Ident ident) args bs) = do
+    env <- ask
+
+    -- TODO: ładne łapanie errorów i dodawanie kontekstu
+    case M.lookup cls $ classes env of
+        Nothing       -> throwTCM "2IMPOSSIBLE ERROR TODO"
+        (Just clsDef) -> case extends clsDef of
+            Nothing       -> return ()
+            (Just parent) -> case M.lookup parent $ classes env of
+                Nothing          -> throwTCM "6IMPOSSIBLE ERROR TODO"
+                (Just parentDef) -> case M.lookup ident $ members parentDef of
+                    Nothing -> return ()
+                    (Just parentMemberType) ->
+                        case M.lookup ident $ members clsDef of
+                            Nothing -> throwTCM "IMSPOIBLEEEEEEEEE TODO"
+                            (Just memberType) -> do
+                                -- liftIO $ putStrLn $ show parentMemberType
+                                -- liftIO $ putStrLn $ show memberType
+                                matchType [parentMemberType] memberType
+                                return ()
+    -- liftIO $ putStrLn $ show x
+
     ret'      <- typeToTCType ret
-    env       <- ask
     -- TODO : set return
     argsTypes <- handleArgs args
     let
@@ -183,38 +380,6 @@ handleArgs args = do
 
 -- TODO: jaki jest default decl klasy rekurencyjnej? (list atrybutem list)
 -- TODO : sprawdzać czy nazwy memberów się nie powtarzają
-handleClsMember :: Var -> ClMember -> TCM TCEnv
-handleClsMember cls (Attr type_ (Ident ident)) = do
-    env <- ask
-    case M.lookup cls $ classes env of
-        Nothing       -> throwTCM "1IMPOSSIBLE ERROR TODO"
-        (Just clsDef) -> do
-            checkIfMemberExists (members clsDef) ident
-            t <- typeToTCType type_
-            let clsDef' =
-                    clsDef { members = M.insert ident t $ members clsDef }
-            let
-                env' = env
-                    { types = M.insert ident (t, initScope + 1) $ types env
-                    } -- TODO: initScope + 1, gurl, zgubisz się (pewnie już się zgubiłaś, ciiiii)
-            return $ env' { classes = M.insert cls clsDef' (classes env) }
-
-handleClsMember cls (Meth ret (Ident ident) args _) = do
-    env <- ask
-    case M.lookup cls $ classes env of
-        Nothing       -> throwTCM "2IMPOSSIBLE ERROR TODO"
-        (Just clsDef) -> do
-            checkIfMemberExists (members clsDef) ident
-            t <- typeToTCType $ Fun ret (map (\(Arg t _) -> t) args)
-            let clsDef' =
-                    clsDef { members = M.insert ident t $ members clsDef }
-            return $ env { classes = M.insert cls clsDef' (classes env) }
-
-checkIfMemberExists :: M.Map Var TCType -> Var -> TCM ()
-checkIfMemberExists mmbrs name = case M.lookup name mmbrs of
-    Nothing -> return ()
-    _       -> throwTCM $ "member `" ++ name ++ "` already declared"
-
 
 checkFnDefsM :: [TopDef] -> TCM TCEnv
 checkFnDefsM ss = do
@@ -261,7 +426,7 @@ checkStmtM (SExp e) = do
 
 checkStmtM (Decl t ds) = do
     when (t == Void) $ throwTCM "Void variable declaration is forbidden"
-    checkIfClassExists t
+    checkIfClassExistsT t
     env <- ask
     foldM go env ds
   where
@@ -336,7 +501,7 @@ checkStmtM stmt@(CondElse e s1 s2) = do
     -- where msg e = [e, "\nin if/else statement:", printTree stmt]
 
 checkStmtM (For type_ (Ident iter) arr stmt) = do
-    checkIfClassExists type_
+    checkIfClassExistsT type_
     (TArr t) <- matchExpType undefinedArrType arr
     typeToTCType type_ >>= matchType [t]
 
@@ -411,7 +576,7 @@ checkIncrDecr assignable = do
 
 checkExprM :: Expr -> TCM TCType
 checkExprM (ECastNull ident@(Ident cls)) = do
-    checkIfClassExists (Cls ident)
+    checkIfClassExistsT (Cls ident)
     return (TDClass cls)
 checkExprM (EVar    (Ident var)) = getVarType var
 
@@ -439,10 +604,10 @@ checkExprM e@(EOr e1 e2) = checkBinOp [TBool] e1 e2
 
 
 checkExprM (ENew cls@(Cls (Ident clsName)) ClsNotArr) = do
-    checkIfClassExists cls
+    checkIfClassExistsT cls
     return $ TDClass clsName
 checkExprM (ENew type_ (ArrSize sizeExpr)) = do
-    checkIfClassExists type_ -- doesn't have to be a class, that's ok
+    checkIfClassExistsT type_ -- doesn't have to be a class, that's ok
     matchExpType TInt sizeExpr
     TArr <$> typeToTCType type_
 checkExprM e@(ENew _ _) = throwMsg ["Illegal `new` expression: ", printTree e]
@@ -462,14 +627,19 @@ checkExprM (EAttrAcc expr (Ident ident))
   where
     checkEAttrAcc = do
         (TDClass clsName) <- matchExpType wildcardClass expr -- TODO: nigdy się teoretycznie nie powinno wywalić, bo matchExpType rzuca jc
-        classes           <- asks classes
-        case M.lookup clsName classes of
-            Nothing       -> throwTCM "3IMPOSSIBLE ERROR, IT HAS TO EXIST"
-            (Just clsDef) -> case M.lookup ident (members clsDef) of
-                Nothing -> throwTCM "NO such attribute TODO msg"
-                (Just (TDFun _ _)) ->
-                    throwTCM "It's a method not an attribute TODO msg"
-                (Just t) -> return t
+        matchAttr clsName
+      where
+        matchAttr clsName = do
+            classes <- asks classes
+            case M.lookup clsName classes of
+                Nothing       -> throwTCM "3IMPOSSIBLE ERROR, IT HAS TO EXIST"
+                (Just clsDef) -> case M.lookup ident (members clsDef) of
+                    Nothing -> case extends clsDef of
+                        Nothing     -> throwTCM "NO such attribute TODO msg"
+                        Just parent -> matchAttr parent
+                    (Just (TDFun _ _)) ->
+                        throwTCM "It's a method not an attribute TODO msg"
+                    (Just t) -> return t
 
 checkExprM e@(EMethCall expr (Ident ident) es) = do
     (TDClass clsName) <- matchExpType wildcardClass expr -- TODO: nigdy się teoretycznie nie powinno wywalić, bo matchExpType rzuca jc
@@ -480,7 +650,9 @@ checkExprM e@(EMethCall expr (Ident ident) es) = do
         case M.lookup clsName classes of
             Nothing       -> throwTCM "4IMPOSSIBLE ERROR, IT HAS TO EXIST"
             (Just clsDef) -> case M.lookup ident (members clsDef) of
-                Nothing                 -> throwTCM "NO such method TODO msg"
+                Nothing -> case extends clsDef of
+                    Nothing     -> throwTCM "NO such method TODO msg"
+                    Just parent -> matchMethod parent
                 (Just (TDFun args ret)) -> do
                     checkArgs args es
                     return ret
@@ -552,6 +724,7 @@ checkBinOp ts e1 e2 = do
 
   --  msg err = [err, "\nIn:", printTree expr]
 
+--TODO: może tu też trzeba klasy pasowalne ogarniać?
 matchType :: [TCType] -> TCType -> TCM ()
 matchType [ex] act = when (ex /= act)
     $ throwMsg ["Expected type:", show ex, "\nActual type:", show act]
