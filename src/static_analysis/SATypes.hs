@@ -92,6 +92,15 @@ getClassDef var = do
     env <- asks classes
     return $ M.lookup var env
 
+getSureClassDef :: Var -> TCM ClassDef
+getSureClassDef cls = do
+    classes <- asks classes
+    case M.lookup cls $ classes of
+        Just clsDef -> return clsDef
+        Nothing ->
+            throwTCM
+                "Impossible - we're checking this class's members, so it was already added to `classes` in env."
+
 
 getVarType :: Var -> TCM TCType
 getVarType var = do
