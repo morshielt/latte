@@ -71,11 +71,23 @@ runStaticAnalysis (Program prog) = runReaderT (go prog)
 
     go :: [TopDef] -> TCM TCEnv
     go prog = do
-        env    <- ask
-        env'   <- foldM saveTopDefTypes env prog
+        env  <- ask
+        env' <- foldM saveTopDefTypes env prog
+        local (const env') checkMainPresent
         env''  <- local (const env') (saveClassesMembers prog)
         env''' <- local (const env'') (checkClassDefsM prog)
         local (const env''') (checkFnDefsM prog)
+        checkReturns prog
+        ask
+
+checkMainPresent :: TCM ()
+checkMainPresent = do
+    types <- asks types
+    -- liftIO $ putStrLn $ show types
+    case M.lookup "main" types of
+        Nothing -> throwTCM "Missing `main` function declaration"
+        (Just (TDFun [] TInt, _)) -> return ()
+        (Just (t, _)) -> throwTCM $ "Invalid `main` function type :" ++ show t
 
 saveTopDefTypes :: TCEnv -> TopDef -> TCM TCEnv
 saveTopDefTypes env td = local (const env) $ saveTopDef td
@@ -86,6 +98,7 @@ saveTopDefTypes env td = local (const env) $ saveTopDef td
         t   <- typeToTCType $ Fun ret (map (\(Arg t _) -> t) args)
         env <- ask
         return $ env { types = M.insert name (t, initScope) (types env) }
+
     saveTopDef (ClDef (Ident clsName) classext _) = do
         clsDef <- getClassDef clsName
         case clsDef of
@@ -125,10 +138,12 @@ saveClassesMembers ss = do
 
         saveClassMember :: Var -> ClMember -> TCM TCEnv
         saveClassMember cls member = case member of
-            Attr type_ (Ident ident)      -> saveClassMember' cls ident type_
-            Meth ret (Ident ident) args _ -> saveClassMember' cls ident
-                $ Fun ret (map (\(Arg t _) -> t) args)
+            Attr type_ (Ident ident) -> saveClassMember' cls ident type_
+            Meth ret (Ident ident') args _ ->
+                let type_ = Fun ret (map (\(Arg t _) -> t) args)
+                in  saveClassMember' cls ident' type_ `throwExtraMsg` msg ident'
           where
+            msg ident' e = [e, " in method `", ident', "`"]
             saveClassMember' :: Var -> Var -> Type -> TCM TCEnv
             saveClassMember' cls ident type_ = do
                 env    <- ask
@@ -182,48 +197,47 @@ checkClassDefsM ss = do
             local (const env) $ checkMethods ident cmembers `throwExtraMsg` msg
           where
             checkMethods :: Var -> ClMember -> TCM TCEnv
-            checkMethods cls Attr{}                             = ask
-            checkMethods cls x@(Meth ret (Ident ident) args bs) = do
-                env    <- ask
-                clsDef <- getSureClassDef cls
+            checkMethods cls Attr{} = ask
+            checkMethods cls (Meth ret (Ident ident) args bs) =
+                checkMethod `throwExtraMsg` msg'
+              where
+                msg' e = [e, " in method `", ident, "`"]
+                checkMethod = do
+                    clsDef <- getSureClassDef cls
+                    case extends clsDef of
+                        Nothing     -> return ()
+                        Just parent -> do
+                            parentDef <- getSureClassDef parent
+                            matchVirtualMethod clsDef parentDef
 
-                case extends clsDef of
-                    Nothing       -> return ()
-                    (Just parent) -> do
-                        parentDef <- getSureClassDef parent
+                    argsTypes <- handleArgs args
+                    let
+                        argsTypes' = M.insert selfMember
+                                              (TDClass cls, scope env + 1)
+                                              argsTypes
+
+                    ret' <- typeToTCType ret
+                    env  <- ask
+                    let
+                        env' = env
+                            { types       = argsTypes' `union` types env
+                            , expectedRet =
+                                Just (ret', " method `" ++ ident ++ "`")
+                            }
+                    local (const env') $ checkStmtM $ BStmt bs
+                    ask
+                  where
+                    matchVirtualMethod clsDef parentDef =
                         case M.lookup ident $ members parentDef of
                             Nothing -> return ()
-                            (Just parentMemberType) ->
+                            Just parentMemberType ->
                                 case M.lookup ident $ members clsDef of
                                     Nothing ->
-                                        throwTCM "IMSPOIBLEEEEEEEEE TODO"
-                                    (Just memberType) -> do
-                                        -- liftIO $ putStrLn $ show parentMemberType
-                                        -- liftIO $ putStrLn $ show memberType
+                                        throwTCM
+                                            "Impossible - we're currently checking this method's correctness - it has to exist."
+                                    Just memberType -> do
                                         matchType [parentMemberType] memberType
                                         return ()
-                -- liftIO $ putStrLn $ show x
-
-                ret'      <- typeToTCType ret
-                -- TODO : set return
-                argsTypes <- handleArgs args
-                let
-                    env' = env
-                        { types = M.insert "self" (TDClass cls, scope env + 1)
-                                  $       argsTypes
-                                  `union` types env
-                        , expectedRet =
-                            Just
-                                ( ret'
-                                , "class `"
-                                ++ cls
-                                ++ "` method `"
-                                ++ ident
-                                ++ "`"
-                                )
-                        }
-                local (const env') $ checkStmtM $ BStmt bs
-                ask
 
 handleArgs :: [Arg] -> TCM Types
 handleArgs args = do
@@ -232,14 +246,20 @@ handleArgs args = do
         (\(Arg t (Ident var)) -> do
             t' <- typeToTCType t
             if t' == TVoid
-                then throwTCM "Illegal void function parameter TODO msg"
-                else return (var, (t', scope + 1)) -- TODO: check czy na pewno wszystko co używa `handleArgs` jest BStmt i robi scope +1
+                then
+                    throwTCM
+                    $  "Illegal `void` type function parameter `"
+                    ++ var
+                    ++ "`"
+                else return (var, (t', scope + 1))
         )
         args
     let mapList = fromList list
     if length list == length mapList
         then return mapList
         else throwTCM "Function arguments must have different names"
+    --   where checkVoidParams
+
 
 -- TODO: jaki jest default decl klasy rekurencyjnej? (list atrybutem list)
 -- TODO : sprawdzać czy nazwy memberów się nie powtarzają
@@ -309,7 +329,7 @@ checkStmtM (Decl t ds) = do
                 --     [var, ": Default function declaration is forbidden"]
                 -- _ -> return var
             (Init (Ident var) e) -> case t of
-                (TDClass cls) -> matchParentClasses cls e >> return var
+                (TDClass cls) -> matchParentClassExpr cls e >> return var
                 _             -> matchExpType t e >> return var -- TODO: czy dla klas to wystarcza?
         checkIfNameAlreadyInScope var
 
@@ -327,7 +347,7 @@ checkStmtM (BStmt (Block ss)) = do
 checkStmtM (Ass assignable e) = do
     t <- checkExprM assignable `throwExtraMsg` msg
     case t of
-        (TDClass cls) -> matchParentClasses cls e
+        (TDClass cls) -> matchParentClassExpr cls e
         _             -> do
             matchExpType t e
             ask
@@ -339,33 +359,31 @@ checkStmtM (Ass assignable e) = do
 --             t <- getVarType var
 --             matchExpType t e
 --         (EArrAcc accessible index) -> do -- TODO: w tym arrAcc są Expr7!!!! no i co z tego?
---             (TArr t) <- matchExpType undefinedArrType accessible
+--             (TArr t) <- matchExpType wildcardArr accessible
 --             matchExpType TInt index
 --             matchExpType t    e
 --         (EAttrAcc accessible attr) -> undefined
 --     ask
 
-checkStmtM (     Incr e                         ) = checkIncrDecr e
-checkStmtM (     Decr e                         ) = checkIncrDecr e
+checkStmtM (Incr e                         ) = checkIncrDecr e
+checkStmtM (Decr e                         ) = checkIncrDecr e
 
-checkStmtM stmt@(While e s                      ) = checkWhileIf e [s]
-checkStmtM stmt@(Cond  e s                      ) = checkWhileIf e [s]
-checkStmtM stmt@(CondElse e s1 s2               ) = checkWhileIf e [s1, s2]
+checkStmtM (While e s                      ) = checkWhileIf e [s]
+checkStmtM (Cond  e s                      ) = checkWhileIf e [s]
+checkStmtM (CondElse e s1 s2               ) = checkWhileIf e [s1, s2]
 
 
-checkStmtM (     For type_ (Ident iter) arr stmt) = do
+checkStmtM (For type_ (Ident iter) arr stmt) = do
     checkIfClassExistsT type_
-    (TArr t) <- matchExpType undefinedArrType arr
-    typeToTCType type_ >>= matchType [t]
-
-    s   <- asks scope
+    (TArr t) <- matchExpType wildcardArr arr
+    t'       <- typeToTCType type_
+    matchType [t'] t
     env <- ask
-    let typesWithIter = M.insert iter (t, s + 1) (types env)
-    case stmt of
-        (BStmt ss) ->
-            local (\env -> env { types = typesWithIter }) (checkStmtM stmt)
-        _ -> local (\env -> env { scope = s + 1, types = typesWithIter })
-                   (checkStmtM stmt)
+    let typesWithIter = M.insert iter (t, scope env + 1) (types env)
+    let stmt' = case stmt of
+            (BStmt _) -> stmt
+            _         -> BStmt (Block [stmt])
+    local (\env -> env { types = typesWithIter }) (checkStmtM stmt')
     ask
 
 -- unchecked BEGIN
@@ -374,6 +392,21 @@ checkStmtM VRet    = matchReturn TVoid
 checkStmtM (Ret e) = matchReturn =<< checkExprM e
 
 matchReturn :: TCType -> TCM TCEnv
+matchReturn t@(TDClass cls) = do
+    ex <- asks expectedRet
+    case ex of
+        Nothing           -> throwTCM "Return outside of function"
+        (Just (eT, name)) -> case eT of
+            (TDClass parentCls) -> matchParentClasses parentCls cls
+            _                   -> throwMsg
+                [ "Expected type:"
+                , show ex
+                , "\nActual type:"
+                , show t
+                , "in function return"
+                ]
+    -- ask
+
 matchReturn t = do
     ex <- asks expectedRet
     case ex of
@@ -388,8 +421,7 @@ checkWhileIf e [s] = matchExpType TBool e >> checkStmtM s >> ask
 checkWhileIf e [s1, s2] =
     matchExpType TBool e >> checkStmtM s1 >> checkStmtM s2 >> ask
 checkWhileIf _ _ =
-    throwTCM
-        "Impossible - while/if has at least 1 and at most 2 statements to check."
+    throwTCM "Impossible - while/if has 1 or 2 statements to check."
 
 checkIncrDecr :: Expr -> TCM TCEnv
 checkIncrDecr e = checkExprM e >>= matchType [TInt] >> ask
@@ -433,12 +465,12 @@ checkExprM (ENew type_ (ArrSize sizeExpr)) = do
 checkExprM e@(ENew _ _) =
     throwTCM $ "Illegal `new` expression: " ++ printTree e
 checkExprM (EArrAcc expr1 expr2) = do
-    (TArr act) <- matchExpType undefinedArrType expr1
+    (TArr act) <- matchExpType wildcardArr expr1
     matchExpType TInt expr2
     return act
 checkExprM (EAttrAcc expr (Ident ident))
     | ident == "length" = do
-        type_ <- matchExpType undefinedArrType expr
+        type_ <- matchExpType wildcardArr expr
         case type_ of
             (TArr _) -> return TInt
             _        -> checkEAttrAcc
@@ -494,7 +526,7 @@ checkArgs args es = if length args == length es
 
 matchExpType :: TCType -> Expr -> TCM TCType
 matchExpType ex e
-    | ex == undefinedArrType = do
+    | ex == wildcardArr = do
         act <- checkExprM e
         case act of
             (TArr type_) -> return act
@@ -532,12 +564,18 @@ matchExpType ex e
 checkBinOp :: [TCType] -> Expr -> Expr -> TCM TCType
 checkBinOp ts e1 e2 = do
     e1T <- checkExprM e1
-    matchType ts e1T
-    matchType [e1T] =<< checkExprM e2
+    e2T <- checkExprM e2
+    case (e1T, e2T) of
+        (TDClass e1C, TDClass e2C) -> checkAnyClassCompatibility e1C e2C
+        _                          -> do
+            matchType ts    e1T
+            matchType [e1T] e2T
     return e1T
 
 --TODO: może tu też trzeba klasy pasowalne ogarniać?
 matchType :: [TCType] -> TCType -> TCM ()
+matchType [TDClass parent] (TDClass cls) =
+    matchParentClasses parent cls >> return ()
 matchType [ex] act = when (ex /= act)
     $ throwMsg ["Expected type:", show ex, "\nActual type:", show act]
 matchType exs cls@(TDClass _) = when (wildcardClass `notElem` exs) $ throwMsg
@@ -545,25 +583,98 @@ matchType exs cls@(TDClass _) = when (wildcardClass `notElem` exs) $ throwMsg
 matchType exs act = when (act `notElem` exs) $ throwMsg
     ["Expected one of types:", show' exs, "\nActual type:", show act]
 
-
-matchParentClasses :: Var -> Expr -> TCM TCEnv
-matchParentClasses clsParent e = do
+matchParentClassExpr :: Var -> Expr -> TCM TCEnv
+matchParentClassExpr clsParent e = do
     t2 <- checkExprM e
     case t2 of
-        (TDClass cls) -> do
-            compatibles <- getCompatibleClasses cls
-            if clsParent `notElem` compatibles
-                then
-                    throwTCM
-                        "TODO msg incompatible types (incompatible unrelated classes)"
-                else ask
+        (TDClass cls) -> matchParentClasses clsParent cls
         _ -> throwTCM "TODO msg incompatible types (expected class got sth)"
+
+
+matchParentClasses :: Var -> Var -> TCM TCEnv
+matchParentClasses clsParent cls = do
+    compatibles <- getCompatibleClasses cls
+    if clsParent `notElem` compatibles
+        then throwTCM
+            "TODO msg incompatible types (incompatible unrelated classes)"
+        else ask
+
+checkAnyClassCompatibility :: Var -> Var -> TCM ()
+checkAnyClassCompatibility cls1 cls2 = do
+    compatibles1 <- getCompatibleClasses cls1
+    when (cls2 `notElem` compatibles1) $ do
+        compatibles2 <- getCompatibleClasses cls2
+        when (cls1 `notElem` compatibles2) $ throwTCM
+            "TODO msg incompatible types (incompatible unrelated classes)"
+
+
+getCompatibleClasses :: Var -> TCM [Var]
+getCompatibleClasses cls = getCompatibles [cls] cls
+getCompatibles :: [Var] -> Var -> TCM [Var]
+getCompatibles compatible cls = do
+    p <- getClassParent cls
+    case p of
+        Nothing       -> return compatible
+        (Just parent) -> getCompatibles (parent : compatible) parent
+
+----------------------RETURNS--------------------------------------------------
+-- check if every branch of every function has a return
+-- returns in while statements doesn't count
+
+checkReturns :: [TopDef] -> TCM ()
+checkReturns = mapM_ checkTopDefReturn
   where
-    getCompatibleClasses :: Var -> TCM [Var]
-    getCompatibleClasses cls = getCompatibles [cls] cls
-    getCompatibles :: [Var] -> Var -> TCM [Var]
-    getCompatibles compatible cls = do
-        p <- getClassParent cls
-        case p of
-            Nothing       -> return compatible
-            (Just parent) -> getCompatibles (parent : compatible) parent
+    checkTopDefReturn :: TopDef -> TCM ()
+    checkTopDefReturn (FnDef Void (Ident ident) _ b) = return ()
+    checkTopDefReturn (FnDef _    (Ident ident) _ b) = do
+        res <- checkReturn (BStmt b)
+        if res
+            then return ()
+            else throwMsg ["Missing return value in function:\n", ident]
+    checkTopDefReturn (ClDef _ _ clsmembers) = mapM_ checkMemberReturns
+                                                     clsmembers
+
+      where
+        checkMemberReturns :: ClMember -> TCM Bool
+        checkMemberReturns (Attr type_ (Ident ident)   ) = return False
+        checkMemberReturns (Meth Void (Ident ident) _ b) = return True
+        checkMemberReturns (Meth _    (Ident ident) _ b) = do
+            res <- checkReturn (BStmt b)
+            if res
+                then return False
+                else throwMsg ["Missing return value in method:\n", ident] -- TODO: in class...
+
+    -- checkExprReturn :: Expr -> TCM ()
+    -- checkExprReturn e@(ELambda _ _ b) = do
+    --     res <- checkReturn (BStmt b)
+    --     unless res $ throwMsg
+    --         ["Missing return value in lambda expression:\n", printTree e]
+    -- checkExprReturn (EApp _ es) = mapM_ checkExprReturn es
+    -- checkExprReturn _           = return ()
+
+    checkReturn :: Stmt -> TCM Bool
+    checkReturn (Ret _)                    = return True
+    checkReturn VRet                       = return True
+    checkReturn (While ELitTrue s        ) = checkReturn s
+    checkReturn (Cond  ELitTrue s        ) = checkReturn s
+    checkReturn (CondElse ELitTrue  s1 _ ) = checkReturn s1
+    checkReturn (CondElse ELitFalse _  s2) = checkReturn s2
+    checkReturn (CondElse _ s1 s2) = (&&) <$> checkReturn s1 <*> checkReturn s2
+-- checkStmtM (While e s                      ) = checkWhileIf e [s]
+
+    -- checkReturn (SExp e          ) = do
+    --     checkExprReturn e
+    --     return False
+    -- checkReturn (Ass _ e) = do
+    --     checkExprReturn e
+    --     return False
+    -- checkReturn (Decl _ ds) = do
+    --     mapM_ itemCheck ds
+    --     return False
+    --   where
+    --     itemCheck (Init _ e) = checkExprReturn e
+    --     itemCheck _          = return ()
+    checkReturn (BStmt (Block ss)        ) = foldM checkOr False ss
+        where checkOr acc s = (||) acc <$> checkReturn s
+    checkReturn _ = return False
+

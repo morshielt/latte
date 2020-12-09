@@ -34,8 +34,12 @@ data TCEnv = TCEnv
 data TCType = TString | TInt | TBool | TVoid | TArr TCType | TDClass Var | TDFun [TCType] TCType
         deriving Eq
 
-undefinedArrType :: TCType
-undefinedArrType = TArr TVoid
+
+selfMember :: Var
+selfMember = "self"
+
+wildcardArr :: TCType
+wildcardArr = TArr TVoid
 
 wildcardClass :: TCType
 wildcardClass = TDClass ""
