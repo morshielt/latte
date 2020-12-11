@@ -1,5 +1,5 @@
 #!/bin/bash
- # && ./complier lattests201003/lattests/good/core032.lat
+ # && ./latc lattests201003/lattests/good/core032.lat
 
  make -B  
  EXPECT=""
@@ -22,8 +22,8 @@ strings=(
 for dir in "${strings[@]}"; do
     for filename in ${dir}/*.lat; do
         
-        ERROR=$( ( ./complier "$filename" ) 2>&1 )
-        # OUTPUT=$(./complier "$filename")
+        ERROR=$( ( ./latc "$filename" ) 2>&1 )
+        # OUTPUT=$(./latc "$filename")
 
         if [ "$EXPECT" != "$ERROR" ]
         then
@@ -36,12 +36,12 @@ done
 
 for filename in lattests201003/lattests/bad/*.lat; do
     echo $filename
-    ./complier "$filename"
+    ./latc "$filename"
     echo ""
 
 
-    #  ERROR=$( ( ./complier "$filename" ) 2>&1 )
-    #     # OUTPUT=$(./complier "$filename")
+    #  ERROR=$( ( ./latc "$filename" ) 2>&1 )
+    #     # OUTPUT=$(./latc "$filename")
 
     #     if [ "$EXPECT" == "$ERROR" ]
     #     then

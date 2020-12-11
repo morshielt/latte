@@ -21,10 +21,10 @@ executable latte
     LexLatte
     ParLatte
     PrintLatte
-    SATypes
+    SACommon
     SAUtils
-    StmtTC
-    ReturnsCheck
+    SAStmts
+    SAReturnsCheck
     StaticAnalysis
     -- Types
     -- TCTypes

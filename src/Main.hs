@@ -9,7 +9,6 @@ import           ParLatte
 import           AbsLatte
 
 import           StaticAnalysis                 ( runStaticAnalysis )
--- import           Interpreter
 
 import           ErrM
 

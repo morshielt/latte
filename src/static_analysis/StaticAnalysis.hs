@@ -3,18 +3,13 @@ module StaticAnalysis
     )
 where
 
-
 import           AbsLatte
 
-import           SATypes
--- import           SAUtils
-import           StmtTC                         ( checkStmtM )
-import           ReturnsCheck
--- import           PrintLatte (printTree)
+import           SACommon
+import           SAStmts                        ( checkStmtM )
+import           SAReturnsCheck
 
 import           Control.Monad.Reader
-
-
 import           Data.List                      ( intercalate )
 import           Data.Map                      as M
                                                 ( Map
@@ -26,20 +21,11 @@ import           Data.Map                      as M
                                                 )
 
 
--- TODO: posprawdzać jak wyglądają error message
-
--- TODO: to chyba też już nie w typechecku
--- int[][] arr = new int[][20];
--- arr[1] = 5; -- TODO: co tu w ogóle można przypisać? tablicę odp. długości czy nic czy co????
--- TODO: jak się odwołuję poza tablicę, ale to raczej już później, bo w typechecku chyba nie mogę?
--- TODO: for (int i : arr) i = 5; -- czy to w ogóle se można takie przypisania?
--- TODO: jaki jest default decl klasy rekurencyjnej? (list atrybutem list) null chyba nie?
-
 runStaticAnalysis (Program prog) = runReaderT (go prog)
-    $ TCEnv initialTypes M.empty initScope Nothing
+    $ TCEnv predefinedFns M.empty initScope Nothing
   where
-    initialTypes :: M.Map Var (TCType, Scope)
-    initialTypes = M.fromList
+    predefinedFns :: M.Map Var (TCType, Scope)
+    predefinedFns = M.fromList
         [ ("printInt"   , (TDFun [TInt] TVoid, initScope))
         , ("printString", (TDFun [TString] TVoid, initScope))
         , ("error"      , (TDFun [] TVoid, initScope))
@@ -57,15 +43,6 @@ runStaticAnalysis (Program prog) = runReaderT (go prog)
         local (const env''') (checkFnDefsM prog)
         checkReturns prog
         ask
-
-
-checkMainPresent :: TCM ()
-checkMainPresent = do
-    types <- asks types
-    case M.lookup "main" types of
-        Nothing -> throwTCM "Missing `main` function declaration"
-        (Just (TDFun [] TInt, _)) -> return ()
-        (Just (t, _)) -> throwTCM $ "Invalid `main` function type :" ++ show t
 
 saveTopDefTypes :: TCEnv -> TopDef -> TCM TCEnv
 saveTopDefTypes env td = local (const env) $ saveTopDef td
@@ -92,6 +69,14 @@ saveTopDefTypes env td = local (const env) $ saveTopDef td
             NoExt              -> Nothing
             Ext (Ident parent) -> Just parent
 
+checkMainPresent :: TCM ()
+checkMainPresent = do
+    types <- asks types
+    case M.lookup "main" types of
+        Nothing -> throwTCM "Missing `main` function declaration"
+        Just (TDFun [] TInt, _) -> return ()
+        Just (t, _) -> throwTCM $ "Invalid `main` function type :" ++ show t
+
 saveClassesMembers :: [TopDef] -> TCM TCEnv
 saveClassesMembers ss = do
     env <- ask
@@ -99,19 +84,6 @@ saveClassesMembers ss = do
   where
     go :: TCEnv -> TopDef -> TCM TCEnv
     go env' s = local (const env') $ saveClassMembers s
-
-    checkExtends :: Var -> TCM TCEnv
-    checkExtends cls = checkIfExtendsAcyclic [cls] cls
-
-    checkIfExtendsAcyclic :: [Var] -> Var -> TCM TCEnv
-    checkIfExtendsAcyclic visited cls = do
-        maybeParent <- getClassParent cls
-        case maybeParent of
-            Nothing       -> ask
-            (Just parent) -> if parent `elem` visited
-                then
-                    throwTCM $ "CYCLIC CLASS EXTENDS TODO msg: " ++ show visited
-                else checkIfExtendsAcyclic (parent : visited) parent
 
     saveClassMembers :: TopDef -> TCM TCEnv
     saveClassMembers FnDef{}                           = ask
@@ -121,12 +93,27 @@ saveClassesMembers ss = do
         env' <- foldM (go' ident) env clmembers
         return $ env { classes = classes env' }
       where
+        checkExtends :: Var -> TCM TCEnv
+        checkExtends cls = checkIfExtendsAcyclic [cls] cls
+          where
+            checkIfExtendsAcyclic :: [Var] -> Var -> TCM TCEnv
+            checkIfExtendsAcyclic visited cls = do
+                maybeParent <- getClassParent cls
+                case maybeParent of
+                    Nothing       -> ask
+                    (Just parent) -> if parent `elem` visited
+                        then
+                            throwTCM
+                            $  "Cyclic class inheritance for classes: "
+                            ++ intercalate ", " visited
+                        else checkIfExtendsAcyclic (parent : visited) parent
+
         go' :: Var -> TCEnv -> ClMember -> TCM TCEnv
         go' ident env cmembers =
             local (const env)
             $               saveClassMember ident cmembers
             `throwExtraMsg` msg
-            where msg e = [e, " in class `", ident, "`"]
+            where msg e = "in class `" ++ ident ++ "` " ++ e
 
         saveClassMember :: Var -> ClMember -> TCM TCEnv
         saveClassMember cls member = case member of
@@ -135,7 +122,7 @@ saveClassesMembers ss = do
                 let type_ = Fun ret (map (\(Arg t _) -> t) args)
                 in  saveClassMember' cls ident' type_ `throwExtraMsg` msg ident'
           where
-            msg ident' e = [e ++ "in method `" ++ ident' ++ "`"]
+            msg ident' e = "in method `" ++ ident' ++ ":`\n" ++ e
             saveClassMember' :: Var -> Var -> Type -> TCM TCEnv
             saveClassMember' cls ident type_ = do
                 env    <- ask
@@ -168,7 +155,7 @@ checkClassDefsM ss = do
         foldM_ (goCheckMethods ident) env' clmembers
         ask
       where
-        msg e = [e ++ "in class `" ++ ident ++ "`"]
+        msg e = "in class `" ++ ident ++ "` " ++ e
 
         goAddAttrsToEnv :: Var -> TCEnv -> ClMember -> TCM TCEnv
         goAddAttrsToEnv ident env cmembers =
@@ -193,7 +180,7 @@ checkClassDefsM ss = do
             checkMethods cls (Meth ret (Ident ident) args bs) =
                 checkMethod `throwExtraMsg` msg'
               where
-                msg' e = [e, " in method `", ident, "`"]
+                msg' e = "in method `" ++ ident ++ ":`\n" ++ e
                 checkMethod = do
                     clsDef <- getSureClassDef cls
                     case extends clsDef of
@@ -211,11 +198,9 @@ checkClassDefsM ss = do
                     ret' <- typeToTCType ret
                     env  <- ask
                     let
-                        env' = env
-                            { types       = argsTypes' `union` types env
-                            , expectedRet =
-                                Just (ret', " method `" ++ ident ++ "`")
-                            }
+                        env' = env { types       = argsTypes' `union` types env
+                                   , expectedRet = Just ret'
+                                   }
                     local (const env') $ checkStmtM $ BStmt bs
                     ask
                   where
@@ -228,10 +213,33 @@ checkClassDefsM ss = do
                                 case M.lookup ident $ members clsDef of
                                     Nothing ->
                                         throwTCM
-                                            "Impossible - we're currently checking this method's correctness - it has to exist."
+                                            "Impossible - we're currently checking this method's correctness - it has to exist"
                                     Just memberType -> do
                                         matchType [parentMemberType] memberType
                                         return ()
+
+checkFnDefsM :: [TopDef] -> TCM TCEnv
+checkFnDefsM ss = do
+    env <- ask
+    foldM go env ss
+  where
+    go :: TCEnv -> TopDef -> TCM TCEnv
+    go env' s = local (const env') $ checkFnDefM s
+
+    checkFnDefM :: TopDef -> TCM TCEnv
+    checkFnDefM ClDef{}                          = ask
+    checkFnDefM (FnDef ret (Ident name) args bs) = do
+        ret'      <- typeToTCType ret
+        env       <- ask
+        argsTypes <- handleArgs args
+        let
+            env' = env { types       = argsTypes `union` types env
+                       , expectedRet = Just ret'
+                       }
+        local (const env') $ checkStmtM (BStmt bs) `throwExtraMsg` msg
+        ask
+        where msg e = "in function `" ++ name ++ "`:\n" ++ e
+
 
 handleArgs :: [Arg] -> TCM Types
 handleArgs args = do
@@ -251,28 +259,4 @@ handleArgs args = do
     let mapList = fromList list
     if length list == length mapList
         then return mapList
-        else throwTCM "Function arguments must have different names"
-    --   where checkVoidParams
-
-checkFnDefsM :: [TopDef] -> TCM TCEnv
-checkFnDefsM ss = do
-    env <- ask
-    foldM go env ss
-  where
-    go :: TCEnv -> TopDef -> TCM TCEnv
-    go env' s = local (const env') $ checkFnDefM s
-
-checkFnDefM :: TopDef -> TCM TCEnv
-checkFnDefM ClDef{}                          = ask
-checkFnDefM (FnDef ret (Ident name) args bs) = do
-    ret'      <- typeToTCType ret
-    env       <- ask
-    argsTypes <- handleArgs args
--- TODO : set return
--- TODO : dodać argumenty do enva przy sprawdzaniu funkcji
-    let env' = env { types       = argsTypes `union` types env
-                   , expectedRet = Just (ret', name)
-                   }
-    local (const env') $ checkStmtM (BStmt bs) `throwExtraMsg` msg
-    ask
-    where msg e = [e ++ "in function: `" ++ name ++ "`"]
+        else throwTCM "Function's arguments must have different names"
