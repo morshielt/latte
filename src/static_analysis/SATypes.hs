@@ -2,9 +2,8 @@ module SATypes where
 
 import           AbsLatte
 
-
-import           Control.Monad.Except
 import           Control.Monad.Reader
+import           Control.Monad.Except
 import           Control.Monad.Trans.Except
 
 import           Data.List                      ( intercalate )
@@ -12,14 +11,17 @@ import           Data.Map                      as M
                                                 ( Map
                                                 , lookup
                                                 )
-type TCM a = ReaderT TCEnv (ExceptT String IO) a
 
 type Var = String
+
 type Scope = Integer
+initScope :: Scope
+initScope = 0
+
 type Types = M.Map Var (TCType, Scope)
 
 data ClassDef = ClassDef
-    { members :: M.Map Var TCType -- attributes/methods
+    { members :: M.Map Var TCType
     , extends :: Maybe Var
     }  deriving Show
 
@@ -27,16 +29,15 @@ data TCEnv = TCEnv
   { types :: Types
   , classes :: M.Map Var ClassDef
   , scope :: Scope -- current scope
-  , expectedRet :: Maybe (TCType, Var) -- expected return type and expecting function name
---   , inLoop :: Bool
+  , expectedRet :: Maybe (TCType, Var) -- expected return type and expecting function/method name
   } deriving Show
+
+type TCM a = ReaderT TCEnv (ExceptT String IO) a
+
 
 data TCType = TString | TInt | TBool | TVoid | TArr TCType | TDClass Var | TDFun [TCType] TCType
         deriving Eq
 
-
-selfMember :: Var
-selfMember = "self"
 
 wildcardArr :: TCType
 wildcardArr = TArr TVoid
@@ -53,9 +54,6 @@ instance Show TCType where
     show (TDClass clsName) = "class `" ++ clsName ++ "`"-- TODO: czy wypisywać `class`?
     show (TDFun args ret ) = "(" ++ show' args ++ ") -> " ++ show ret
 
-show' :: Show a => [a] -> String
-show' = intercalate ", " . map show
-
 typeToTCType :: Type -> TCM TCType
 typeToTCType Str                       = return TString
 typeToTCType Int                       = return TInt
@@ -70,6 +68,34 @@ typeToTCType (Fun ret args) =
 
 
 ----------------------------------------------------------------------
+
+matchType :: [TCType] -> TCType -> TCM ()
+matchType [TDClass parent] (TDClass cls) = do
+    compatibles <- getCompatibleClasses cls
+    when (parent `notElem` compatibles) $ throwTCM
+        "TODO msg incompatible types (incompatible unrelated classes)"
+matchType [ex] act = when (ex /= act)
+    $ throwMsg ["expected type:", show ex, "\nactual type  :", show act]
+matchType exs cls@(TDClass _) = when (wildcardClass `notElem` exs) $ throwMsg
+    ["Expected one of types:", show' exs, "\nActual type:", show cls]
+matchType exs act = when (act `notElem` exs) $ throwMsg
+    ["Expected one of types:", show' exs, "\nActual type:", show act]
+
+getCompatibleClasses :: Var -> TCM [Var]
+getCompatibleClasses cls = getCompatibles [cls] cls
+  where
+    getCompatibles :: [Var] -> Var -> TCM [Var]
+    getCompatibles compatible cls = do
+        p <- getClassParent cls
+        case p of
+            Nothing       -> return compatible
+            (Just parent) -> getCompatibles (parent : compatible) parent
+
+
+
+show' :: Show a => [a] -> String
+show' = intercalate ", " . map show
+
 
 checkIfClassExists :: Var -> TCM ()
 checkIfClassExists var = do
@@ -105,12 +131,11 @@ getSureClassDef cls = do
             throwTCM
                 "Impossible - we're checking this class's members, so it was already added to `classes` in env."
 
-
 getVarType :: Var -> TCM TCType
 getVarType var = do
     typeScope <- getVarTypeScope var
     case typeScope of
-        Nothing       -> throwTCM $ concat ["Variable `", var, "` not declared"]
+        Nothing       -> throwTCM $ "Use of undeclared `" ++ var ++ "`"
         (Just (t, _)) -> return t
 
 getVarTypeScope :: Var -> TCM (Maybe (TCType, Scope))
@@ -130,7 +155,7 @@ checkIfNameAlreadyInScope var = do
                 $  throwTCM
                 $  "`" -- TODO: better message - topdefs fns/classes arent variables
                 ++ var
-                ++ "` already declared"
+                ++ "` already declared\n"
 
 throwTCM :: String -> TCM a
 throwTCM = lift . throwE

@@ -11,12 +11,14 @@ ClDef.     TopDef ::= "class" Ident ClassExt "{" [ClMember] "}" ;
 separator nonempty TopDef "" ;
 
 NoExt.     ClassExt ::= ;
+
 Ext.       ClassExt ::= "extends" Ident ;
 
-Attr.     ClMember ::= Type Ident ";" ;
-Meth.     ClMember ::= Type Ident "(" [Arg] ")" Block ;
+Attr.      ClMember ::= Type Ident ";" ;
 
-separator ClMember "";
+Meth.      ClMember ::= Type Ident "(" [Arg] ")" Block ;
+
+separator  ClMember "";
 
 Arg.       Arg ::= Type Ident;
 
@@ -24,43 +26,43 @@ separator  Arg "," ;
 
 -- statements ----------------------------------------------
 
-Block.     Block ::= "{" [Stmt] "}" ; --X
+Block.     Block ::= "{" [Stmt] "}" ;
 
 separator  Stmt "" ;
 
-Empty.     Stmt ::= ";" ; --X
+Empty.     Stmt ::= ";" ;
 
-BStmt.     Stmt ::= Block ; --X
+BStmt.     Stmt ::= Block ;
 
-Decl.      Stmt ::= Type [Item] ";" ; --X
+Decl.      Stmt ::= Type [Item] ";" ;
 
-NoInit.    Item ::= Ident ; --X
+NoInit.    Item ::= Ident ;
 
-Init.      Item ::= Ident "=" Expr ; --X
+Init.      Item ::= Ident "=" Expr ;
 
 separator nonempty Item "," ;
 
 Ass.       Stmt ::= Expr8 "=" Expr  ";" ;
 
-Incr.      Stmt ::= Expr8 "++"  ";" ; --X
+Incr.      Stmt ::= Expr8 "++"  ";" ;
 
-Decr.      Stmt ::= Expr8 "--"  ";" ; --X
+Decr.      Stmt ::= Expr8 "--"  ";" ;
 
 Ret.       Stmt ::= "return" Expr ";" ;
 
 VRet.      Stmt ::= "return" ";" ;
 
-Cond.      Stmt ::= "if" "(" Expr ")" Stmt  ; --X
+Cond.      Stmt ::= "if" "(" Expr ")" Stmt  ;
 
-CondElse.  Stmt ::= "if" "(" Expr ")" Stmt "else" Stmt  ; --X
+CondElse.  Stmt ::= "if" "(" Expr ")" Stmt "else" Stmt  ;
 
-While.     Stmt ::= "while" "(" Expr ")" Stmt ; --X
+While.     Stmt ::= "while" "(" Expr ")" Stmt ;
 
-SExp.      Stmt ::= Expr  ";" ; --X
+SExp.      Stmt ::= Expr  ";" ;
 
-For.       Stmt ::= "for" "(" Type Ident ":" Expr ")" Stmt ; --X
+For.       Stmt ::= "for" "(" Type Ident ":" Expr ")" Stmt ;
 
--- Types ---------------------------------------------------
+-- types ---------------------------------------------------
 Arr.       Type  ::= Type "[]" ;
 
 Cls.       Type ::= Ident ;
@@ -77,42 +79,31 @@ internal   Fun. Type ::= Type "(" [Type] ")" ;
 
 separator  Type "," ;
 
--- coercions  Type 1 ;
-
 
 -- expressions ---------------------------------------------
 
--- assignables
-EVar.          Expr8 ::= Ident ; --X
+- - assignables - - - - - - - - - - - - - - - - - - - - - -
 
--- AttrAcc. AttrAccess ::= Expr7 "." Ident ;
--- EAttrAccess.   Expr8 ::= AttrAccess ;
-EAttrAcc.   Expr8 ::= Expr7 "." Ident ;
+EVar.      Expr8 ::= Ident ;
 
--- ArrayElem.  ArrElemAccess ::= Expr7 "[" Expr "]" ;
--- EArrAccess.    Expr8 ::= ArrElemAccess ;
-EArrAcc.    Expr8 ::= Expr7 "[" Expr "]" ;
+EAttrAcc.  Expr8 ::= Expr7 "." Ident ;
 
+EArrAcc.   Expr8 ::= Expr7 "[" Expr "]" ;
 
--- accessibles
--- MCall.    MethodCall ::= Expr7 "." FunctionCall ;
--- EMthCall.      Expr7 ::= MethodCall ;
-EMethCall.      Expr7 ::= Expr7 "." Ident "(" [Expr] ")" ;
+- - accessibles - - - - - - - - - - - - - - - - - - - - - -
 
-ENew.       Expr7 ::= "new" Type ArrSize ;
+EMethCall. Expr7 ::= Expr7 "." Ident "(" [Expr] ")" ;
 
-ArrSize.  ArrSize ::= "[" Expr "]" ;
-ClsNotArr.  ArrSize ::= ;
-
-
--- ENew.          Expr7 ::= "new" Ident ;
-
--- EFunCall.      Expr7 ::= FunctionCall ;
--- FunctionCall.    FunctionCall ::= Ident "(" [Expr] ")" ;
 EApp.      Expr7 ::= Ident "(" [Expr] ")" ;
 
+ENew.      Expr7 ::= "new" Type ArrSize ;
 
--- lower level expressions
+ArrSize.   ArrSize ::= "[" Expr "]" ;
+
+ClsNotArr. ArrSize ::= ;
+
+- - lower level expressions - - - - - - - - - - - - - - - -
+
 ECastNull.     Expr6 ::= "(" Ident ")null";
 
 ELitInt.   Expr6 ::= Integer ;
@@ -121,11 +112,9 @@ ELitTrue.  Expr6 ::= "true" ;
 
 ELitFalse. Expr6 ::= "false" ;
 
--- EApp.      Expr6 ::= Ident "(" [Expr] ")" ;
-
 EString.   Expr6 ::= String ;
 
-Neg.       Expr5 ::= "-" Expr6 ; -- jeśli - -1 albo !!true ma się skompilować, to zmień Expr6 na Expr5 tu i niżej
+Neg.       Expr5 ::= "-" Expr6 ;
 
 Not.       Expr5 ::= "!" Expr6 ;
 
@@ -142,32 +131,6 @@ EOr.       Expr ::= Expr1 "||" Expr ;
 coercions  Expr 8 ;
 
 separator  Expr "," ;
-
-
--- misc ----------------------------------------------------
-
--- FunctionCall.    FunctionCall ::= Ident "(" [Expr] ")" ;
-
--- ArrayElem.  ArrElemAccess ::= Expr7 "[" Expr "]" ;
-
--- AttrAcc. AttrAccess ::= Expr7 "." Ident ;
-
--- MCall.    MethodCall ::= Expr7 "." FunctionCall ;
-
--- NewArr. NewArr ::= "new" Type "[" Expr "]" ;
-
--- callables -----------------------------------------------
-
--- -- CVNewArr. CValue ::= "(" NewArr ")" ;
--- CVFunCall.           LValue ::= FunctionCall ;
--- CVMetCall.           LValue ::= MethodCall ;
--- -- CLValue. CValue ::= LValue ;
--- -- CVMethodCall.        CValue ::= MethodCall "." FunctionCall;
-
--- -- lvalues -------------------------------------------------
--- LVJustIdent.         LValue ::= Ident ;
--- LVArrayAcc.          LValue ::= ArrElemAccess ;
--- LVAttrAcc.           LValue ::= AttrAccess ;
 
 -- operators -----------------------------------------------
 
@@ -200,31 +163,3 @@ comment    "#" ;
 comment    "//" ;
 
 comment    "/*" "*/" ;
-
-
--- -- callables ---------------------------------------------
-
--- CValFunCall.           CValue ::= FunCall ;
--- CValMetCall.           CValue ::= MetCall ;
--- -- CValLVal.              CValue ::= LValue;
--- CJustIdent.         CValue ::= Ident ; -- x = 5;
--- CalArrElem.       CValue ::= ArrElemAccess ; -- a[3] = 5;
--- CValClsAttr.       CValue ::= AttrAccess ;  -- o.x = 5;
-
-
--- FunCall.    FunCall ::= Ident "(" [Expr] ")" ;
--- MCall.      MetCall ::= CValue "." FunCall ;
-
-
--- -- assignables (lvals) ---------------------------------------------
-
--- JustIdent.         LValue ::= Ident ; -- x = 5;
--- LValArrElem.       LValue ::= ArrElemAccess ; -- a[3] = 5;
--- LValClsAttr.       LValue ::= AttrAccess ;  -- o.x = 5;
-
--- ArrayElem.  ArrElemAccess ::= CValue "[" Expr "]" ; 
--- AttrAcc.    AttrAccess    ::= CValue "." Ident ; 
--- -- ^ czy tu przeszkadza CValue?
--- -- w sensie bo to umożliwia: funcRetObject().x = 6; ale czy to problem?
-
--- --

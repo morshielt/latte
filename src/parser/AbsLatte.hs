@@ -58,8 +58,8 @@ data Expr
     | EAttrAcc Expr Ident
     | EArrAcc Expr Expr
     | EMethCall Expr Ident [Expr]
-    | ENew Type ArrSize
     | EApp Ident [Expr]
+    | ENew Type ArrSize
     | ECastNull Ident
     | ELitInt Integer
     | ELitTrue

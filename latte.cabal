@@ -23,6 +23,8 @@ executable latte
     PrintLatte
     SATypes
     SAUtils
+    StmtTC
+    ReturnsCheck
     StaticAnalysis
     -- Types
     -- TCTypes

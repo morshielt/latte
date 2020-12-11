@@ -32,3 +32,20 @@ for dir in "${strings[@]}"; do
         fi
     done
 done
+
+
+for filename in lattests201003/lattests/bad/*.lat; do
+    echo $filename
+    ./complier "$filename"
+    echo ""
+
+
+    #  ERROR=$( ( ./complier "$filename" ) 2>&1 )
+    #     # OUTPUT=$(./complier "$filename")
+
+    #     if [ "$EXPECT" == "$ERROR" ]
+    #     then
+    #         echo $filename
+    #         # echo $ERROR
+    #     fi
+done

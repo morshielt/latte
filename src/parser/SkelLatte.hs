@@ -71,8 +71,8 @@ transExpr x = case x of
   EAttrAcc expr ident -> failure x
   EArrAcc expr1 expr2 -> failure x
   EMethCall expr ident exprs -> failure x
-  ENew type_ arrsize -> failure x
   EApp ident exprs -> failure x
+  ENew type_ arrsize -> failure x
   ECastNull ident -> failure x
   ELitInt integer -> failure x
   ELitTrue -> failure x
