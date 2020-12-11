@@ -78,21 +78,21 @@ matchType [TDClass parent] (TDClass cls) = do
 matchType [ex] act =
     when (ex /= act)
         $  throwTCM
-        $  "expected type:"
+        $  "expected type: "
         ++ show ex
-        ++ "\nactual type  :"
+        ++ "\nactual type  : "
         ++ show act
 matchType exs cls@(TDClass _) =
     when (wildcardClass `notElem` exs)
         $  throwTCM
-        $  "Expected one of types:"
+        $  "Expected one of types: "
         ++ show' exs
         ++ "\nActual type:"
         ++ show cls
 matchType exs act =
     when (act `notElem` exs)
         $  throwTCM
-        $  "Expected one of types:"
+        $  "Expected one of types: "
         ++ show' exs
         ++ "\nActual type:"
         ++ show act
@@ -163,7 +163,7 @@ checkIfNameAlreadyInScope var = do
     case typeScope of
         Nothing -> return ()
         Just (_, s) ->
-            when (scope == s) $ throwTCM $ "`" ++ var ++ "` already declared\n"
+            when (scope == s) $ throwTCM $ "`" ++ var ++ "` already declared"
 
 throwTCM :: String -> TCM a
 throwTCM = lift . throwE

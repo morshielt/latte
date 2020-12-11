@@ -2,7 +2,7 @@
  # && ./latc lattests201003/lattests/good/core032.lat
 
  make -B  
- EXPECT=""
+ EXPECT="OK"
  ERROR=""
 
 

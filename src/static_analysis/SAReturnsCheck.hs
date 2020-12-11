@@ -20,12 +20,15 @@ checkReturns = mapM_ checkTopDefReturn
         if res
             then return ()
             else
-                throwTCM $ "Missing return value in function: `" ++ ident ++ "`"
+                throwTCM
+                $  "Missing return value in function: `"
+                ++ ident
+                ++ "`\n"
     checkTopDefReturn (ClDef (Ident cls) _ clsmembers) =
         mapM_ checkMemberReturns clsmembers `throwExtraMsg` msg
       where
-        msg e = e ++ " in class `" ++ cls ++ "`"
-        
+        msg e = e ++ " in class `" ++ cls ++ "`\n"
+
         checkMemberReturns :: ClMember -> TCM Bool
         checkMemberReturns (Attr type_ (Ident ident)   ) = return False
         checkMemberReturns (Meth Void (Ident ident) _ b) = return True

@@ -1,0 +1,6 @@
+-- TODO: to chyba też już nie w typechecku
+-- int[][] arr = new int[][20];
+-- arr[1] = 5; -- TODO: co tu w ogóle można przypisać? tablicę odp. długości czy nic czy co????
+-- TODO: jak się odwołuję poza tablicę, ale to raczej już później, bo w typechecku chyba nie mogę?
+-- TODO: for (int i : arr) i = 5; -- czy to w ogóle se można takie przypisania?
+-- TODO: jaki jest default decl klasy rekurencyjnej? (list atrybutem list) null chyba nie?

@@ -49,7 +49,7 @@ checkExprM (ENew type_ (ArrSize sizeExpr)) = do
     checkIfClassExistsT type_
     matchExpType' TInt sizeExpr
     TArr <$> typeToTCType type_
-checkExprM e@(ENew    _     _    ) = throwTCM "Illegal `new` expression\n"
+checkExprM e@(ENew    _     _    ) = throwTCM "Illegal `new` expression"
 checkExprM (  EArrAcc expr1 expr2) = do
     (TArr act) <- matchExpType' wildcardArr expr1
     matchExpType' TInt expr2
@@ -140,7 +140,6 @@ checkBinOp ts e1 e2 = do
                 ++ cls1
                 ++ " and "
                 ++ cls2
-                ++ "\n"
 
 matchExpType :: TCType -> Expr -> TCM TCType
 matchExpType ex e = matchExpType' ex e `throwExtraMsg` msg e

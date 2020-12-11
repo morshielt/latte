@@ -1,37 +1,29 @@
+import           ParLatte
+import           AbsLatte
+import           ErrM
+
+import           StaticAnalysis                 ( runStaticAnalysis )
+
+import           Control.Monad.Except           ( runExceptT )
 import           System.Environment             ( getArgs )
 import           System.Exit                    ( exitFailure )
 import           System.IO                      ( stderr
                                                 , hPutStrLn
+                                                , hPutStr
                                                 )
-import           Control.Monad.Except
-
-import           ParLatte
-import           AbsLatte
-
-import           StaticAnalysis                 ( runStaticAnalysis )
-
-import           ErrM
-
-import           Control.Monad                  ( when )
-import           PrintLatte
 
 check :: String -> IO ()
 check s = case pProgram (myLexer s) of
     Bad err -> do
-        hPutStrLn stderr $ "[Syntax error] " ++ err
+        hPutStrLn stderr $ "ERROR\n[Syntax error]\n " ++ err
         exitFailure
     Ok tree -> do
         tcRes <- runExceptT $ runStaticAnalysis tree
         case tcRes of
             Left e -> do
-                hPutStrLn stderr $ "[Typecheck exception]\n" ++ e
+                hPutStr stderr $ "ERROR\n[Typecheck exception]\n" ++ e
                 exitFailure
-            Right _ -> return ()
-
-showTree :: (Show a, Print a) => a -> IO ()
-showTree tree = do
-    putStrLn $ "\n[Abstract Syntax]\n\n" ++ show tree
-    putStrLn $ "\n[Linearized tree]\n\n" ++ printTree tree
+            Right _ -> hPutStr stderr "OK\n"
 
 main :: IO ()
 main = do

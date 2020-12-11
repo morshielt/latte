@@ -69,7 +69,6 @@ checkStmtM (While e s                      ) = checkWhileIf e [s]
 checkStmtM (Cond  e s                      ) = checkWhileIf e [s]
 checkStmtM (CondElse e s1 s2               ) = checkWhileIf e [s1, s2]
 
-
 checkStmtM (For type_ (Ident iter) arr stmt) = do
     checkIfClassExistsT type_
     (TArr t) <- matchExpType wildcardArr arr
