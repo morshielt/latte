@@ -70,14 +70,18 @@ transStmt x = case x of
         trueCode   <- transStmt s
         afterLabel <- getFreeLabel
         let op =
-                pop eax . binIns "cmp" (lit trueLit) eax . unIns "je" afterLabel
-        return $ condCode . op . trueCode . label afterLabel
+                pop eax
+                    . binIns "cmp" falseLit eax
+                    . unIns "je" afterLabel
+                    . trueCode
+                    . label afterLabel
+        return $ condCode . op
     x -> throwCM $ show x ++ "\nstmt not implemented yet"
 
 transExpr :: Expr -> CM ShowS
 transExpr (ELitInt n) = return $ push $ lit n
-transExpr ELitTrue    = return $ push $ lit trueLit
-transExpr ELitFalse   = return $ push $ lit 0
+transExpr ELitTrue    = return $ push trueLit
+transExpr ELitFalse   = return $ push falseLit
 transExpr (Neg e)     = do
     code <- transExpr e
     return $ code . neg
@@ -85,9 +89,17 @@ transExpr (Neg e)     = do
     neg :: ShowS
     neg = pop eax . unIns "neg" eax . push eax
 
+transExpr (Not e) = do
+    code <- transExpr e
+    return $ code . not
+  where
+    not :: ShowS
+    not = pop eax . binIns "xor" (lit 1) eax . push eax
+
+
 transExpr (EAdd e1 op e2) = do
     let op' = case op of
-            Plus  -> "add"
+            Plus  -> "add" -- TODO: STRINGI!
             Minus -> "sub"
     transBinOp e1 e2 $ binOp (binIns op' ebx eax) eax
 transExpr (EMul e1 Times e2) =
@@ -108,10 +120,10 @@ transExpr e@(ERel e1 op e2) = do -- TODO: UNCHECKED
                 . pop eax
                 . binIns "cmp" ebx eax
                 . unIns (chooseOp op) trueLabel
-                . push (lit falseLit)
+                . push falseLit
                 . unIns "jmp" afterLabel
                 . label trueLabel
-                . push (lit trueLit)
+                . push trueLit
                 . label afterLabel
 
     return $ code1 . code2 . ops
@@ -121,7 +133,7 @@ transExpr e@(ERel e1 op e2) = do -- TODO: UNCHECKED
         LE  -> "jle"
         GTH -> "jg"
         GE  -> "jge"
-        EQU -> "je"
+        EQU -> "je" -- TODO: STRINGI!
         NE  -> "jne"
 
 transExpr (EApp (Ident var) es) = do
@@ -129,6 +141,41 @@ transExpr (EApp (Ident var) es) = do
     let ess = foldr (.) id (reverse es')
     return $ ess . unIns "call" var
 
+transExpr (EAnd e1 e2) = do
+    falseLabel <- getFreeLabel
+    afterLabel <- getFreeLabel
+
+    code1      <- transExpr e1
+    let shortCirc = pop eax . binIns "cmp" falseLit eax . unIns "je" falseLabel
+    code2 <- transExpr e2
+    let trueCode = push trueLit . unIns "jmp" afterLabel
+    return
+        $ code1
+        . shortCirc
+        . code2
+        . shortCirc
+        . trueCode
+        . label falseLabel
+        . push falseLit
+        . label afterLabel
+
+transExpr (EOr e1 e2) = do
+    trueLabel  <- getFreeLabel
+    afterLabel <- getFreeLabel
+
+    code1      <- transExpr e1
+    let shortCirc = pop eax . binIns "cmp" trueLit eax . unIns "je" trueLabel
+    code2 <- transExpr e2
+    let falseCode = push falseLit . unIns "jmp" afterLabel
+    return
+        $ code1
+        . shortCirc
+        . code2
+        . shortCirc
+        . falseCode
+        . label trueLabel
+        . push trueLit
+        . label afterLabel
 
 getFreeLabel :: CM String
 getFreeLabel = do
@@ -178,5 +225,5 @@ edx = "%edx"
 ebp = "%ebp"
 esp = "%esp"
 
-trueLit = 1
-falseLit = 0
+trueLit = lit 1
+falseLit = lit 0
