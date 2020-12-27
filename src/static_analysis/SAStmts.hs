@@ -55,7 +55,7 @@ checkStmtM (BStmt (Block ss)) = do
       where
         go :: TCEnv -> Stmt -> TCM TCEnv
         go env' s = local (const env') $ checkStmtM s `throwExtraMsg` msg
-            where msg e = e ++ "in statement:\n" ++ printTree s
+            where msg e = e ++ " in statement:\n" ++ printTree s
 
 checkStmtM (Ass assignable e) = do
     t <- checkExpr assignable

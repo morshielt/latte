@@ -1,9 +1,7 @@
 #!/bin/bash
- # && ./latc lattests201003/lattests/good/core032.lat
-
- make -B  
- EXPECT="OK"
- ERROR=""
+make -B  
+EXPECT="OK"
+ERROR=""
 
 
 strings=(
@@ -35,17 +33,17 @@ done
 
 
 for filename in lattests201003/lattests/bad/*.lat; do
-    echo $filename
-    ./latc "$filename"
-    echo ""
+    # echo $filename
+    # ./latc "$filename"
+    # echo ""
 
 
-    #  ERROR=$( ( ./latc "$filename" ) 2>&1 )
-    #     # OUTPUT=$(./latc "$filename")
+     ERROR=$( ( ./latc "$filename" ) 2>&1 )
+        # OUTPUT=$(./latc "$filename")
 
-    #     if [ "$EXPECT" == "$ERROR" ]
-    #     then
-    #         echo $filename
-    #         # echo $ERROR
-    #     fi
+        if [ "$EXPECT" == "$ERROR" ]
+        then
+            echo $filename
+            # echo $ERROR
+        fi
 done

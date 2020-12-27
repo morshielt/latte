@@ -14,7 +14,7 @@ cabal-version:       >=1.10
 extra-source-files:  README.md
 
 executable latte
-  hs-source-dirs:      src src/parser src/static_analysis
+  hs-source-dirs:      src src/parser src/static_analysis src/compiler
   other-modules:
     AbsLatte
     ErrM
@@ -26,12 +26,7 @@ executable latte
     SAStmts
     SAReturnsCheck
     StaticAnalysis
-    -- Types
-    -- TCTypes
-    -- TCUtils
-    -- Utils
-    -- Interpreter
-    -- TypeCheck
+    Compiler
   main-is:             Main.hs
   default-language:    Haskell2010
   build-depends:       base >= 4.7 && < 5, array, mtl, containers, transformers

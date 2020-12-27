@@ -138,7 +138,7 @@ getClassDef var = do
 getSureClassDef :: Var -> TCM ClassDef
 getSureClassDef cls = do
     classes <- asks classes
-    case M.lookup cls $ classes of
+    case M.lookup cls classes of
         Just clsDef -> return clsDef
         Nothing ->
             throwTCM
