@@ -3,7 +3,9 @@ import           AbsLatte
 import           ErrM
 
 import           StaticAnalysis                 ( runStaticAnalysis )
-import           Compiler                       ( compile )
+import           Compiler                       ( compile
+                                                , x86
+                                                )
 
 import           Control.Monad.Except           ( runExceptT )
 import           System.Environment             ( getArgs )
@@ -35,7 +37,8 @@ check s = case pProgram (myLexer s) of
                         hPutStrLn stderr $ "[Compilation error] " ++ e
                         exitFailure
                     Right strs -> do
-                        putStrLn strs
+                        -- code <- x86 strs
+                        putStr strs
                         return strs
 
 saveFile :: String -> String -> IO ()
