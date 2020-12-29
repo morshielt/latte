@@ -24,7 +24,7 @@ type Var = String
 type Offset = Integer
 -- type Label = Integer
 type Scope = Integer
-type VOS = M.Map Var Offset
+type VOS = M.Map (Var, Scope) Offset
 
 data CEnv = CEnv
   {
@@ -38,6 +38,7 @@ data CState = CState
   , stack :: Integer
   , maxStack :: Integer
   , maxArgs :: Integer
+  , retLabel :: String
   , varOffScope :: VOS
   } --deriving Show
 
@@ -49,7 +50,7 @@ throwCM :: String -> CM a
 throwCM = lift . lift . throwE
 
 compile (Program prog) = evalStateT (runReaderT (go prog) (CEnv 0))
-                                    (CState 0 0 0 0 0 M.empty)
+                                    (CState 0 0 0 0 0 "" M.empty)
     where go prog = flip ($) [] <$> genExpr prog >>= x86
 
 genExpr :: [TopDef] -> CM InstrS
@@ -62,14 +63,24 @@ genExpr = foldM go $ instrS Intro
 transTopDef :: TopDef -> CM InstrS
 transTopDef x = case x of
     FnDef ret (Ident name) args (Block ss) -> do
-        code <- foldM go id ss
-        vars <- countVars ss
-        modify (\st -> st { locals = vars })
-        -- modify (\st -> st { varOffScope = M.empty })
+        modify
+            (\st -> st { locals      = 0
+                       , varOffScope = M.empty
+                       , retLabel    = "ret_" ++ name
+                       }
+            )
+        --TODO: dodać se argumenty do varOffScope XD
+        code   <- transStmts ss
+        vars   <- countVars ss
+        retLab <- gets retLabel
         return
             $ instrSS [Lab $ FuncLabel name, Prologue, StackAlloc vars]
             . code
+            . instrSS [Lab $ FuncLabel retLab, Epilogue, ZIns RET]
     ClDef{} -> throwCM "classes not implemented yet"
+
+transStmts :: [Stmt] -> CM InstrS
+transStmts = foldM go id
   where
     go :: InstrS -> Stmt -> CM InstrS
     go accCode stmt = do
@@ -89,23 +100,19 @@ countVars (s : ss) = do
         _                  -> return 0
     ssVars <- countVars ss
     return $ sVars + ssVars
---   where
---     handleDecl (NoInit (Ident var)) = undefined
---     handleDecl (Init (Ident var) e) = undefined
---     toBstmt (BStmt b) = [BStmt b]
---     toBstmt s         = [BStmt (Block [s])]
 
 transStmt :: Stmt -> CM InstrS
 transStmt x = case x of
     Empty -> return id
-    VRet  -> return ([Epilogue, ZIns RET] ++)
+    VRet  -> instrS . Jump JMP . FuncLabel <$> gets retLabel
     Ret e -> do
-        code <- transExpr e
-        return $ code . ([POP $ Reg EAX, Epilogue, ZIns RET] ++)
+        code   <- transExpr e
+        retLab <- gets retLabel
+        return $ code . instrSS [POP $ Reg EAX, Jump JMP $ FuncLabel retLab]
     SExp e   -> transExpr e
     Cond e s -> do
         condCode   <- transExpr e
-        trueCode   <- transStmt s
+        trueCode   <- transAsBStmt s
         afterLabel <- getFreeLabel
         let op =
                 instrSS
@@ -115,16 +122,109 @@ transStmt x = case x of
                         ]
                     . trueCode
                     . instrS (Lab $ JmpLabel afterLabel)
-                -- pop eax
-                    -- . binIns "cmp" falseLit eax
-                    -- . unIns "je" afterLabel
-                    -- . trueCode
-                    -- . label afterLabel
         return $ condCode . op
+    CondElse e s1 s2 -> do
+        condCode   <- transExpr e
+        trueCode   <- transAsBStmt s1
+        falseCode  <- transAsBStmt s2
+        falseLabel <- getFreeLabel
+        afterLabel <- getFreeLabel
+        let op =
+                instrSS
+                        [ POP $ Reg EAX
+                        , BinIns CMP falseLit $ Reg EAX
+                        , Jump JE $ JmpLabel falseLabel
+                        ]
+                    . trueCode
+                    . instrS (Jump JE $ JmpLabel afterLabel)
+                    . instrS (Lab $ JmpLabel falseLabel)
+                    . falseCode
+                    . instrS (Lab $ JmpLabel afterLabel)
+        return $ condCode . op
+    While e s -> do
+        condCode  <- transExpr e
+        loopCode  <- transAsBStmt s
+        condLabel <- getFreeLabel
+        loopLabel <- getFreeLabel
+        return
+            $ instrS (Jump JMP $ JmpLabel condLabel)
+            . instrS (Lab $ JmpLabel loopLabel)
+            . loopCode
+            . instrS (Lab $ JmpLabel condLabel)
+            . instrSS
+                  [ POP $ Reg EAX
+                  , BinIns CMP trueLit $ Reg EAX
+                  , Jump JE $ JmpLabel loopLabel
+                  ]
+    Decl _   ds -> foldr (.) id <$> mapM handleDecl ds
+    Ass  ass e  -> do
+        exprCode <- transExpr e
+        (mem, _) <- transAssignable ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
+        return $ exprCode . instrSS [POP $ Reg EAX, MOV (Reg EAX) $ Mem mem]
+    Incr ass -> do
+        (mem, _) <- transAssignable ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
+        return $ instrSS [UnIns INC $ Mem mem]
+    Decr ass -> do
+        (mem, _) <- transAssignable ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
+        return $ instrSS [UnIns DEC $ Mem mem]
+    BStmt (Block bs) ->
+        local (\env -> env { scope = scope env + 1 }) $ transStmts bs
+
     x -> throwCM $ show x ++ "\nstmt not implemented yet"
+  where
+    transAsBStmt :: Stmt -> CM InstrS
+    transAsBStmt s@(BStmt _) = transStmt s
+    transAsBStmt s           = transStmt (BStmt (Block [s]))
+    handleDecl :: Item -> CM InstrS
+    handleDecl d = do
+        state <- get
+        sco   <- asks scope
+        let loc = locals state + 1
+        case d of
+            (NoInit (Ident var)) -> do
+                modify
+                    (\st -> st
+                        { varOffScope = M.insert (var, sco) loc
+                                            $ varOffScope state
+                        , locals      = loc
+                        }
+                    )
+                return id
+            (Init (Ident var) e) -> do
+                modify
+                    (\st -> st
+                        { varOffScope = M.insert (var, sco) loc
+                                            $ varOffScope state
+                        , locals      = loc
+                        }
+                    )
+                initCode <- transExpr e
+                return $ initCode . instrSS
+                    [POP $ Reg EAX, MOV (Reg EAX) (Mem $ Local loc)]
+
+transAssignable :: Expr -> CM (Memory, InstrS)
+transAssignable (EVar (Ident var)) = do
+    sco <- asks scope
+    loc <- findInAnyScope var sco
+    return (Local loc, id)
+-- TODO: tablice/pole ogarnąć instrukcje kolejność no
+transAssignable _ = throwCM "Not an assignable or not implemented"
+
+findInAnyScope :: Var -> Scope -> CM Offset
+findInAnyScope var (-1) = throwCM "Impossible findInAnyScope"
+findInAnyScope var sco  = do
+    state <- get
+    case M.lookup (var, sco) (varOffScope state) of
+        Nothing  -> findInAnyScope var $ sco - 1
+        Just loc -> return loc
 
 transExpr :: Expr -> CM InstrS
-transExpr (ELitInt n) = return (PUSH (Lit n) :)
+transExpr (EVar (Ident var)) = do
+    sco <- asks scope
+    loc <- findInAnyScope var sco
+    return $ instrS $ PUSH $ Mem $ Local loc
+
+transExpr (ELitInt n) = return $ instrS $ PUSH (Lit n)
 transExpr ELitTrue    = return (PUSH trueLit :)
 transExpr ELitFalse   = return (PUSH falseLit :)
 transExpr (Neg e)     = do
@@ -234,7 +334,7 @@ transExpr (EOr e1 e2) = do
 
 transExpr e = throwCM $ show e
 
--- TODO: jak są stałe, to teoretycznie nie trzebaby ich push/pop tylko wpisać żywcem D:
+-- TODO: jak są stałe, to teoretycznie nie trzebaby ich push/pop tylko wpisać żywcem D: jebać
 binOp ops ret = instrSS $ [POP $ Reg ECX, POP $ Reg EAX] ++ ops ++ [PUSH ret]
 
 getFreeLabel :: CM Integer
@@ -285,7 +385,12 @@ instance Show BinOp where
     show XOR = "xor "
     show CMP = "cmp "
 
-data UnOp = NEG | INC | DEC deriving Show--Eq
+data UnOp = NEG | INC | DEC
+instance Show UnOp where
+    show NEG = "neg "
+    show INC = "incl "
+    show DEC = "decl "
+
 data ZOp = RET | CDQ deriving Show
 
 data Label = FuncLabel String | JmpLabel Integer -- | BranchLabel Integer
