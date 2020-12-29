@@ -94,11 +94,17 @@ matchReturn t = do
     where msg e = "Invalid return type\n" ++ e
 
 checkWhileIf :: Expr -> [Stmt] -> TCM TCEnv
-checkWhileIf e [s] = matchExpType TBool e >> checkStmtM s >> ask
+checkWhileIf e [s] = matchExpType TBool e >> checkAsBStmt s >> ask
 checkWhileIf e [s1, s2] =
-    matchExpType TBool e >> checkStmtM s1 >> checkStmtM s2 >> ask
+    matchExpType TBool e >> checkAsBStmt s1 >> checkAsBStmt s2 >> ask
 checkWhileIf _ _ =
     throwTCM "Impossible - while/if has 1 or 2 statements to check."
+
+-- TODO: to pozwala na bezblokowe np. int i = 0; gdzie i już jest a to je owija w blok, tbh nie ma wielkiego znaczenia
+-- ale w sumie chyba nie powinno się teoretycznie wywalać z takiego powodu?
+checkAsBStmt :: Stmt -> TCM TCEnv
+checkAsBStmt s@(BStmt _) = checkStmtM s
+checkAsBStmt s           = checkStmtM (BStmt (Block [s]))
 
 checkIncrDecr :: Expr -> TCM TCEnv
 checkIncrDecr e = checkExpr e >>= matchType [TInt] >> ask
