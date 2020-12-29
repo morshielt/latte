@@ -41,6 +41,8 @@ data CState = CState
   , varOffScope :: VOS
   } --deriving Show
 
+-- type CMonad a = RWS CEnv AsmStmts CState a
+
 type CM a = ReaderT CEnv (StateT CState (ExceptT String IO)) a
 
 throwCM :: String -> CM a
@@ -226,6 +228,9 @@ transExpr (EOr e1 e2) = do
                 , Lab $ JmpLabel afterLabel
                 ]
     return $ code1 . shortCirc . code2 . shortCirc . falseCode . outro
+-- if w1 goto Ltrueif w2 goto Ltrue
+    -- code for Lfalse or goto Lfalse
+
 
 transExpr e = throwCM $ show e
 
@@ -243,29 +248,6 @@ transBinOp e1 e2 opCode = do
     code1 <- transExpr e1
     code2 <- transExpr e2
     return $ code1 . code2 . opCode
-
-
--- label l = showString $ l ++ ":\n"
--- prelude = push ebp . showInd "mov %esp, %ebp\n"
-
--- mov :: String -> String -> InstrS
--- mov = binIns "mov"
-
--- pop, push :: String -> InstrS
--- pop = unIns "pop"
--- push = unIns "push"
-
--- ret :: InstrS
--- ret = pop eax . mov ebp esp . pop ebp . zIns "ret"
-
-
-
--- zIns instr = showInd $ instr ++ "\n"
--- unIns instr cont = showInd $ instr ++ " " ++ cont ++ "\n"
--- binIns instr cont1 cont2 =
---     showInd $ instr ++ " " ++ cont1 ++ ", " ++ cont2 ++ "\n"
-
--- showInd s = showString "    " . showString s
 
 trueLit = Lit 1
 falseLit = Lit 0
@@ -346,72 +328,12 @@ instance Show Instr where
 dword = 4
 
 type InstrS = [Instr] -> [Instr]
-
 instrSS :: [Instr] -> InstrS
 instrSS = (++)
 instrS :: Instr -> InstrS
 instrS = (:)
 
 x86 :: [Instr] -> CM String
-x86 ins = do
-    x <- stackifyx86 ins
-    return $ (unlines . map show) $ x []
+x86 ins = return $ (unlines . map show) ins
 
-stackifyx86 :: [Instr] -> CM InstrS
-stackifyx86 ins = do
-    x <- foldr (.) id <$> mapM stackify ins
-    modify (\st -> st { stack = 0 })
-    foldr (.) id <$> mapM updateStackRelated (x [])
-
-updateStackRelated :: Instr -> CM InstrS
-updateStackRelated (StackAlloc n) = do
-    mStack <- gets maxStack
-    mArgs  <- gets maxStack
-    let aligned =
-            ceiling (fromIntegral (n + mStack + mArgs) / fromIntegral dword)
-                * dword
-    modify (\st -> st { maxStack = aligned }) -- TODO: align stack    -- liftIO $ print (n + stack)
-    return $ instrS $ StackAlloc aligned
-updateStackRelated c@(CALL _ n) = do
-    state <- get
-    modify (\st -> st { stack = stack state - n })
-
-    -- liftIO $ print (maxStack state)
-    let args = map
-            (\i -> -- TODO: this is utter shit. TODO: rewrite, argumenty muszą mieć od razu dobrą lokację a nie to coś.
-                [ MOV (Mem (Stack (stack state + locals state - i))) (Reg EAX) --TODO:FIXME: nie sądzę że to działa dla > 1 arg
-                , MOV (Reg EAX) (Mem (Stack (maxStack state - i)))
-                ]
-            )
-            [0 .. n - 1]
-    return $ instrSS (concat args) . instrS c
-updateStackRelated (PUSH op) = do
-    state <- get
-    modify (\st -> st { stack = stack state + 1 })
-    return $ instrS $ MOV op $ Mem (Stack (stack state + 1 + locals state))
-updateStackRelated (POP op) = do
-    state <- get
-    modify (\st -> st { stack = stack state - 1 })
-    return $ instrS $ MOV (Mem (Stack (stack state + locals state))) op
-updateStackRelated x = return $ instrS x
-
-stackify :: Instr -> CM InstrS
-stackify c@(CALL _ n) = do
-    state <- get
-    modify
-        (\st -> st { stack = stack state - n, maxArgs = max (maxArgs state) n })
-    return $ instrS c
-stackify p@(PUSH op) = do
-    state <- get
-    modify
-        (\st -> st { stack    = stack state + 1
-                   , maxStack = max (maxStack state) $ stack state + 1
-                   }
-        )
-    return $ instrS p -- $ MOV op $ Mem (Stack (stack state + 1 + locals state))
-stackify p@(POP op) = do
-    state <- get
-    modify (\st -> st { stack = stack state - 1 })
-    return $ instrS p -- $ MOV (Mem (Stack (stack state + locals state))) op
-stackify x = return $ instrS x
-
+-- TODO: stack align 16 jeśli trzeba
