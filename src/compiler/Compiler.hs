@@ -17,18 +17,20 @@ import           Data.Map                      as M
                                                 , empty
                                                 , lookup
                                                 , insert
+                                                , fromList
                                                 )
-
+--TODO: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD
 
 type Var = String
 type Offset = Integer
 -- type Label = Integer
 type Scope = Integer
-type VOS = M.Map (Var, Scope) Offset
+type VM = M.Map Var Memory
 
 data CEnv = CEnv
   {
     scope :: Scope
+  , varMem :: VM
     -- , stack :: Integer
   } --deriving Show
 
@@ -39,7 +41,7 @@ data CState = CState
   , maxStack :: Integer
   , maxArgs :: Integer
   , retLabel :: String
-  , varOffScope :: VOS
+--   , ins :: InstrS
   } --deriving Show
 
 -- type CMonad a = RWS CEnv AsmStmts CState a
@@ -49,8 +51,8 @@ type CM a = ReaderT CEnv (StateT CState (ExceptT String IO)) a
 throwCM :: String -> CM a
 throwCM = lift . lift . throwE
 
-compile (Program prog) = evalStateT (runReaderT (go prog) (CEnv 0))
-                                    (CState 0 0 0 0 0 "" M.empty)
+compile (Program prog) = evalStateT (runReaderT (go prog) (CEnv 0 M.empty))
+                                    (CState 0 0 0 0 0 "")
     where go prog = flip ($) [] <$> genExpr prog >>= x86
 
 genExpr :: [TopDef] -> CM InstrS
@@ -62,57 +64,49 @@ genExpr = foldM go $ instrS Intro
 
 transTopDef :: TopDef -> CM InstrS
 transTopDef x = case x of
-    FnDef ret (Ident name) args (Block ss) -> do
-        modify
-            (\st -> st { locals      = 0
-                       , varOffScope = M.empty
-                       , retLabel    = "ret_" ++ name
-                       }
+    FnDef ret (Ident name) args b -> do
+        modify (\st -> st { locals = 0, retLabel = "ret_" ++ name })
+        --TODO: dodać se argumenty do varMem XD
+        (_, code) <- local
+            (\env -> env
+                { varMem = M.fromList $ zipWith
+                               (\(Arg _ (Ident var)) i -> (var, Param i))
+                               args
+                               [1 ..] -- TODO: od 1 czy od 0?}) 
+                }
             )
-        --TODO: dodać se argumenty do varOffScope XD
-        code   <- transStmts ss
-        vars   <- countVars ss
-        retLab <- gets retLabel
+            (transStmt (BStmt b))
+        -- vars   <- countVars ss
+        state <- get
         return
-            $ instrSS [Lab $ FuncLabel name, Prologue, StackAlloc vars]
+            $ instrSS
+                  [Lab $ FuncLabel name, Prologue, StackAlloc $ locals state]
             . code
-            . instrSS [Lab $ FuncLabel retLab, Epilogue, ZIns RET]
+            . instrSS [Lab $ FuncLabel $ retLabel state, Epilogue, ZIns RET]
     ClDef{} -> throwCM "classes not implemented yet"
 
-transStmts :: [Stmt] -> CM InstrS
-transStmts = foldM go id
-  where
-    go :: InstrS -> Stmt -> CM InstrS
-    go accCode stmt = do
-        code <- transStmt stmt
-        return (accCode . code)
-
-countVars :: [Stmt] -> CM Integer
-countVars []       = return 0
-countVars (s : ss) = do
-    sVars <- case s of
-        Decl _ ds          -> return $ fromIntegral $ length ds
-        BStmt (Block bs)   -> countVars bs
-        Cond _ bs          -> countVars [bs]
-        CondElse _ bs1 bs2 -> (+) <$> countVars [bs1] <*> countVars [bs2]
-        While _ bs         -> countVars [bs]
-        For _ _ _ bs       -> (+ 1) <$> countVars [bs] -- TODO: dodać tę zmienną iteracyjną do scope+1 ręcznie
-        _                  -> return 0
-    ssVars <- countVars ss
-    return $ sVars + ssVars
-
-transStmt :: Stmt -> CM InstrS
+transStmt :: Stmt -> CM (CEnv, InstrS)
 transStmt x = case x of
-    Empty -> return id
-    VRet  -> instrS . Jump JMP . FuncLabel <$> gets retLabel
+    Empty -> do
+        env <- ask
+        return (env, id)
+    VRet -> do
+        env <- ask
+        lab <- gets retLabel
+        return (env, instrS $ Jump JMP $ FuncLabel lab)
     Ret e -> do
-        code   <- transExpr e
-        retLab <- gets retLabel
-        return $ code . instrSS [POP $ Reg EAX, Jump JMP $ FuncLabel retLab]
-    SExp e   -> transExpr e
+        code <- transExpr e
+        env  <- ask
+        lab  <- gets retLabel
+        return (env, code . instrSS [POP $ Reg EAX, Jump JMP $ FuncLabel lab])
+    SExp e -> do
+        code <- transExpr e
+        env  <- ask
+        return (env, code)
+
     Cond e s -> do
         condCode   <- transExpr e
-        trueCode   <- transAsBStmt s
+        trueCode   <- transAsBStmt s --TODO: czy mam porzucić ten env?
         afterLabel <- getFreeLabel
         let op =
                 instrSS
@@ -122,7 +116,8 @@ transStmt x = case x of
                         ]
                     . trueCode
                     . instrS (Lab $ JmpLabel afterLabel)
-        return $ condCode . op
+        env <- ask
+        return (env, condCode . op)
     CondElse e s1 s2 -> do
         condCode   <- transExpr e
         trueCode   <- transAsBStmt s1
@@ -136,93 +131,129 @@ transStmt x = case x of
                         , Jump JE $ JmpLabel falseLabel
                         ]
                     . trueCode
-                    . instrS (Jump JE $ JmpLabel afterLabel)
+                    . instrS (Jump JMP $ JmpLabel afterLabel)
                     . instrS (Lab $ JmpLabel falseLabel)
                     . falseCode
                     . instrS (Lab $ JmpLabel afterLabel)
-        return $ condCode . op
+        env <- ask
+        return (env, condCode . op)
     While e s -> do
         condCode  <- transExpr e
         loopCode  <- transAsBStmt s
         condLabel <- getFreeLabel
         loopLabel <- getFreeLabel
+        env       <- ask
         return
-            $ instrS (Jump JMP $ JmpLabel condLabel)
+            ( env
+            , instrS (Jump JMP $ JmpLabel condLabel)
             . instrS (Lab $ JmpLabel loopLabel)
             . loopCode
             . instrS (Lab $ JmpLabel condLabel)
+            . condCode
             . instrSS
                   [ POP $ Reg EAX
                   , BinIns CMP trueLit $ Reg EAX
                   , Jump JE $ JmpLabel loopLabel
                   ]
-    Decl _   ds -> foldr (.) id <$> mapM handleDecl ds
-    Ass  ass e  -> do
+            )
+    Decl t ds -> do --foldr (.) id <$> mapM handleDecl ds
+        env <- ask
+        foldM (goDecl t) (env, id) ds
+
+    Ass ass e -> do
         exprCode <- transExpr e
         (mem, _) <- transAssignable ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
-        return $ exprCode . instrSS [POP $ Reg EAX, MOV (Reg EAX) $ Mem mem]
+        env      <- ask
+        return
+            (env, exprCode . instrSS [POP $ Reg EAX, MOV (Reg EAX) $ Mem mem])
     Incr ass -> do
         (mem, _) <- transAssignable ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
-        return $ instrSS [UnIns INC $ Mem mem]
+        env      <- ask
+        return (env, instrSS [UnIns INC $ Mem mem])
     Decr ass -> do
         (mem, _) <- transAssignable ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
-        return $ instrSS [UnIns DEC $ Mem mem]
-    BStmt (Block bs) ->
-        local (\env -> env { scope = scope env + 1 }) $ transStmts bs
-
+        env      <- ask
+        return (env, instrSS [UnIns DEC $ Mem mem])
+    BStmt (Block ss) -> do
+        env <- ask
+        local (\env -> env { scope = scope env + 1 }) $ transStmts ss
     x -> throwCM $ show x ++ "\nstmt not implemented yet"
   where
-    transAsBStmt :: Stmt -> CM InstrS
-    transAsBStmt s@(BStmt _) = transStmt s
-    transAsBStmt s           = transStmt (BStmt (Block [s]))
-    handleDecl :: Item -> CM InstrS
-    handleDecl d = do
+    transStmts :: [Stmt] -> CM (CEnv, InstrS)
+    transStmts ss = do
+        env       <- ask
+        (_, code) <- foldM go (env, id) ss
+        return (env, code)
+      where
+        go :: (CEnv, InstrS) -> Stmt -> CM (CEnv, InstrS)
+        go (env', accCode) s = do
+            (env'', code) <- local (const env') $ transStmt s
+            return (env'', accCode . code)
+    transAsBStmt :: Stmt -> CM InstrS --TODO: czy mam tu porzucać env? 
+    transAsBStmt s@(BStmt _) = do
+        (_, code) <- transStmt s
+        return code
+    transAsBStmt s = do
+        (_, code) <- transStmt (BStmt (Block [s]))
+        return code
+    goDecl :: Type -> (CEnv, InstrS) -> Item -> CM (CEnv, InstrS)
+    goDecl t (env', accCode) d = do
+        -- t'            <- typeToTCType t
+        (env'', code) <- local (const env') $ handleDecl t d
+        return (env'', accCode . code)
+    -- handleDecl :: TCType -> Item -> TCM TCEnv
+    handleDecl :: Type -> Item -> CM (CEnv, InstrS)
+    handleDecl t d = do
         state <- get
         sco   <- asks scope
-        let loc = locals state + 1
-        case d of
-            (NoInit (Ident var)) -> do
-                modify
-                    (\st -> st
-                        { varOffScope = M.insert (var, sco) loc
-                                            $ varOffScope state
-                        , locals      = loc
-                        }
-                    )
-                return id
+        let loc = Local $ locals state + 1
+        modify (\st -> st { locals = locals state + 1 })
+        (var, code) <- case d of
+            (NoInit (Ident var)) ->
+                return (var, instrS $ MOV (defaultValue t) (Mem loc)) -- TODO: inicjalizacja domyślna!
             (Init (Ident var) e) -> do
-                modify
-                    (\st -> st
-                        { varOffScope = M.insert (var, sco) loc
-                                            $ varOffScope state
-                        , locals      = loc
-                        }
-                    )
                 initCode <- transExpr e
-                return $ initCode . instrSS
-                    [POP $ Reg EAX, MOV (Reg EAX) (Mem $ Local loc)]
+                return
+                    ( var
+                    , initCode
+                        . instrSS [POP $ Reg EAX, MOV (Reg EAX) (Mem loc)]
+                    )
+        env <- ask
+        let envWithDecl = M.insert var loc $ varMem env
+        return (env { varMem = envWithDecl }, code)
+      where
+        defaultValue :: Type -> Operand
+        defaultValue Int  = Lit 0
+        defaultValue Bool = falseLit
+        defaultValue x =
+            error $ "defaultValue for " ++ show x ++ " not impl yet"
 
 transAssignable :: Expr -> CM (Memory, InstrS)
 transAssignable (EVar (Ident var)) = do
-    sco <- asks scope
-    loc <- findInAnyScope var sco
-    return (Local loc, id)
+    env <- ask
+    case M.lookup var (varMem env) of
+        Nothing  -> throwCM "Impossible transExpr (EVar (Ident var))"
+        Just loc -> return (loc, id)
 -- TODO: tablice/pole ogarnąć instrukcje kolejność no
 transAssignable _ = throwCM "Not an assignable or not implemented"
 
-findInAnyScope :: Var -> Scope -> CM Offset
-findInAnyScope var (-1) = throwCM "Impossible findInAnyScope"
-findInAnyScope var sco  = do
-    state <- get
-    case M.lookup (var, sco) (varOffScope state) of
-        Nothing  -> findInAnyScope var $ sco - 1
-        Just loc -> return loc
+-- findInAnyScope :: Var -> Scope -> CM Memory
+-- findInAnyScope var (-1) = throwCM "Impossible findInAnyScope"
+-- findInAnyScope var sco  = do
+--     state <- get
+--     case M.lookup (var, sco) (varMem state) of
+--         Nothing  -> findInAnyScope var $ sco - 1
+--         Just loc -> return loc
 
+--TODO: return expr w eax i wtedy push tylko jak złożony i potem brać bez popa tylko od razu z eax ogar.
 transExpr :: Expr -> CM InstrS
 transExpr (EVar (Ident var)) = do
-    sco <- asks scope
-    loc <- findInAnyScope var sco
-    return $ instrS $ PUSH $ Mem $ Local loc
+    -- sco <- asks scope
+    -- loc <- findInAnyScope var sco
+    env <- ask
+    case M.lookup var (varMem env) of
+        Nothing  -> throwCM "Impossible transExpr (EVar (Ident var))"
+        Just loc -> return $ instrS $ PUSH $ Mem loc
 
 transExpr (ELitInt n) = return $ instrS $ PUSH (Lit n)
 transExpr ELitTrue    = return (PUSH trueLit :)
@@ -287,7 +318,7 @@ transExpr e@(ERel e1 op e2) = do -- TODO: UNCHECKED
 transExpr (EApp (Ident var) es) = do
     es' <- mapM transExpr es
     let ess = foldr (.) id (reverse es')
-    return $ ess . instrS (CALL var $ fromIntegral $ length es)
+    return $ ess . instrSS [CALL var $ fromIntegral $ length es, PUSH $ Reg EAX]
 
 transExpr (EAnd e1 e2) = do
     falseLabel <- getFreeLabel
@@ -365,7 +396,7 @@ instance Show Register where
 
 data Memory = Local Integer | Param Integer | Stack Integer
 instance Show Memory where
-    show (Param n) = show (dword * n) ++ "(" ++ show EBP ++ ")" -- TODO: jeszcze jakoś +/- 4 bo ten adr powr czy co to tam jest czy nie?
+    show (Param n) = show (dword * (n + 1)) ++ "(" ++ show EBP ++ ")" -- TODO: jeszcze jakoś +/- 4 bo ten adr powr czy co to tam jest czy nie?
     show (Local n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
     show (Stack n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
 
