@@ -26,11 +26,12 @@ runStaticAnalysis (Program prog) = runReaderT (go prog)
   where
     predefinedFns :: M.Map Var (TCType, Scope)
     predefinedFns = M.fromList
-        [ ("printInt"   , (TDFun [TInt] TVoid, initScope))
-        , ("printString", (TDFun [TString] TVoid, initScope))
-        , ("error"      , (TDFun [] TVoid, initScope))
-        , ("readInt"    , (TDFun [] TInt, initScope))
-        , ("readString" , (TDFun [] TString, initScope))
+        [ ("printInt"     , (TDFun [TInt] TVoid, initScope))
+        , ("printString"  , (TDFun [TString] TVoid, initScope))
+        , ("error"        , (TDFun [] TVoid, initScope))
+        , ("readInt"      , (TDFun [] TInt, initScope))
+        , ("readString"   , (TDFun [] TString, initScope))
+        , ("concatStrings", (TDFun [TString, TString] TString, initScope)) --TODO: nazwa lepsza czy coś
         ]
 
     go :: [TopDef] -> TCM TCEnv

@@ -30,7 +30,6 @@ check s = case pProgram (myLexer s) of
                 hPutStr stderr $ "ERROR\n[Typecheck exception]\n" ++ e
                 exitFailure
             Right _ -> do
-                hPutStr stderr "OK\n" -- TODO: czy to 'OK' nadal ma się wypisywać?
                 genCode <- runExceptT $ compile tree
                 case genCode of
                     Left e -> do
@@ -38,6 +37,7 @@ check s = case pProgram (myLexer s) of
                         exitFailure
                     Right strs -> do
                         -- code <- x86 strs
+                        hPutStr stderr "OK\n" -- TODO: czy to 'OK' nadal ma się wypisywać?
                         putStr strs
                         return strs
 

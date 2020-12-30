@@ -17,6 +17,8 @@ import           Data.Map                      as M
                                                 , empty
                                                 , lookup
                                                 , insert
+                                                , size
+                                                , elems
                                                 , fromList
                                                 )
 --TODO: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD
@@ -25,7 +27,7 @@ type Var = String
 type Offset = Integer
 -- type Label = Integer
 type Scope = Integer
-type VM = M.Map Var Memory
+type VM = M.Map Var (Memory, Type)
 
 data CEnv = CEnv
   {
@@ -41,6 +43,8 @@ data CState = CState
   , maxStack :: Integer
   , maxArgs :: Integer
   , retLabel :: String
+  , strings :: M.Map String Label
+  , funRet :: M.Map Var Type
 --   , ins :: InstrS
   } --deriving Show
 
@@ -51,12 +55,30 @@ type CM a = ReaderT CEnv (StateT CState (ExceptT String IO)) a
 throwCM :: String -> CM a
 throwCM = lift . lift . throwE
 
-compile (Program prog) = evalStateT (runReaderT (go prog) (CEnv 0 M.empty))
-                                    (CState 0 0 0 0 0 "")
-    where go prog = flip ($) [] <$> genExpr prog >>= x86
+compile (Program prog) = evalStateT
+    (runReaderT (go prog) (CEnv 0 M.empty))
+    (CState 0 0 0 0 0 "" M.empty predefinedFns)
+  where
+    go prog = flip ($) [] <$> genExpr prog >>= x86
+    predefinedFns :: M.Map Var Type
+    predefinedFns = M.fromList
+        [ ("printInt"     , Void)
+        , ("printString"  , Void)
+        , ("error"        , Void)
+        , ("readInt"      , Int)
+        , ("readString"   , Str)
+        , ("concatStrings", Str) --TODO: nazwa lepsza czy coś
+        ]
+
+
 
 genExpr :: [TopDef] -> CM InstrS
-genExpr = foldM go $ instrS Intro
+genExpr tds = do
+    code <- foldM go id tds
+    strs <- gets strings
+    let strLabels = map Lab $ M.elems strs
+    return $ instrS Intro . instrSS strLabels . code
+
   where
     go accCode stmt = do
         code <- transTopDef stmt
@@ -65,12 +87,17 @@ genExpr = foldM go $ instrS Intro
 transTopDef :: TopDef -> CM InstrS
 transTopDef x = case x of
     FnDef ret (Ident name) args b -> do
-        modify (\st -> st { locals = 0, retLabel = "ret_" ++ name })
+        modify
+            (\st -> st { locals   = 0
+                       , retLabel = "ret_" ++ name
+                       , funRet   = M.insert name ret $ funRet st
+                       }
+            )
         --TODO: dodać se argumenty do varMem XD
         (_, code) <- local
             (\env -> env
                 { varMem = M.fromList $ zipWith
-                               (\(Arg _ (Ident var)) i -> (var, Param i))
+                               (\(Arg t (Ident var)) i -> (var, (Param i, t)))
                                args
                                [1 ..] -- TODO: od 1 czy od 0?}) 
                 }
@@ -156,9 +183,11 @@ transStmt x = case x of
                   , Jump JE $ JmpLabel loopLabel
                   ]
             )
-    Decl t ds -> do --foldr (.) id <$> mapM handleDecl ds
-        env <- ask
-        foldM (goDecl t) (env, id) ds
+    Decl t ds -> if t `notElem` [Int, Bool, Str]
+        then throwCM $ "Decl for " ++ show t ++ " not impl yet"
+        else do
+            env <- ask
+            foldM (goDecl t) (env, id) ds
 
     Ass ass e -> do
         exprCode <- transExpr e
@@ -209,8 +238,9 @@ transStmt x = case x of
         let loc = Local $ locals state + 1
         modify (\st -> st { locals = locals state + 1 })
         (var, code) <- case d of
-            (NoInit (Ident var)) ->
-                return (var, instrS $ MOV (defaultValue t) (Mem loc)) -- TODO: inicjalizacja domyślna!
+            (NoInit (Ident var)) -> do
+                def <- defaultValue t
+                return (var, instrS $ MOV def (Mem loc)) -- TODO: inicjalizacja domyślna!
             (Init (Ident var) e) -> do
                 initCode <- transExpr e
                 return
@@ -219,21 +249,22 @@ transStmt x = case x of
                         . instrSS [POP $ Reg EAX, MOV (Reg EAX) (Mem loc)]
                     )
         env <- ask
-        let envWithDecl = M.insert var loc $ varMem env
+        let envWithDecl = M.insert var (loc, t) $ varMem env
         return (env { varMem = envWithDecl }, code)
       where
-        defaultValue :: Type -> Operand
-        defaultValue Int  = Lit 0
-        defaultValue Bool = falseLit
+        defaultValue :: Type -> CM Operand
+        defaultValue Int  = return $ Lit 0
+        defaultValue Bool = return falseLit
+        defaultValue Str  = StrLit <$> getStrLabel ""
         defaultValue x =
-            error $ "defaultValue for " ++ show x ++ " not impl yet"
+            throwCM $ "defaultValue for " ++ show x ++ " not impl yet"
 
 transAssignable :: Expr -> CM (Memory, InstrS)
 transAssignable (EVar (Ident var)) = do
     env <- ask
     case M.lookup var (varMem env) of
-        Nothing  -> throwCM "Impossible transExpr (EVar (Ident var))"
-        Just loc -> return (loc, id)
+        Nothing       -> throwCM "Impossible transExpr (EVar (Ident var))"
+        Just (loc, _) -> return (loc, id)
 -- TODO: tablice/pole ogarnąć instrukcje kolejność no
 transAssignable _ = throwCM "Not an assignable or not implemented"
 
@@ -246,14 +277,29 @@ transAssignable _ = throwCM "Not an assignable or not implemented"
 --         Just loc -> return loc
 
 --TODO: return expr w eax i wtedy push tylko jak złożony i potem brać bez popa tylko od razu z eax ogar.
+
+getStrLabel :: String -> CM Integer
+getStrLabel str = do
+    strs <- gets strings
+    case M.lookup str strs of
+        Nothing -> do
+            let i = fromIntegral $ M.size strs
+            modify (\st -> st { strings = M.insert str (StrLabel i str) strs })
+            return i
+        Just (StrLabel i str) -> return i
+
 transExpr :: Expr -> CM InstrS
+transExpr (EString str) = do
+    index <- getStrLabel str
+    return $ instrS $ PUSH $ StrLit index
+
 transExpr (EVar (Ident var)) = do
     -- sco <- asks scope
     -- loc <- findInAnyScope var sco
     env <- ask
     case M.lookup var (varMem env) of
-        Nothing  -> throwCM "Impossible transExpr (EVar (Ident var))"
-        Just loc -> return $ instrS $ PUSH $ Mem loc
+        Nothing       -> throwCM "Impossible transExpr (EVar (Ident var))"
+        Just (loc, _) -> return $ instrS $ PUSH $ Mem loc
 
 transExpr (ELitInt n) = return $ instrS $ PUSH (Lit n)
 transExpr ELitTrue    = return (PUSH trueLit :)
@@ -273,10 +319,19 @@ transExpr (Not e) = do
     not = instrSS [POP $ Reg EAX, BinIns XOR (Lit 1) $ Reg EAX, PUSH $ Reg EAX]
 
 transExpr (EAdd e1 op e2) = do
-    let op' = case op of
-            Plus  -> ADD -- TODO: STRINGI!
-            Minus -> SUB
-    transBinOp e1 e2 $ binOp [BinIns op' (Reg ECX) $ Reg EAX] $ Reg EAX
+    t <- getExprType e1
+    case t of
+        Str -> transExpr (EApp (Ident "concatStrings") [e1, e2])
+            -- do
+            -- code1 <- transExpr e1
+            -- code2 <- transExpr e2
+            -- let strConcat = instrSS [CALL "concatStrings" 2, PUSH $ Reg EAX]
+            -- return $ code2 . code1 . strConcat
+        _   -> do
+            let op' = case op of
+                    Plus  -> ADD -- TODO: STRINGI!
+                    Minus -> SUB
+            transBinOp e1 e2 $ binOp [BinIns op' (Reg ECX) $ Reg EAX] $ Reg EAX
 transExpr (EMul e1 Times e2) =
     transBinOp e1 e2 $ binOp [BinIns MUL (Reg ECX) $ Reg EAX] $ Reg EAX
 transExpr (EMul e1 op e2) = do
@@ -318,7 +373,11 @@ transExpr e@(ERel e1 op e2) = do -- TODO: UNCHECKED
 transExpr (EApp (Ident var) es) = do
     es' <- mapM transExpr es
     let ess = foldr (.) id (reverse es')
-    return $ ess . instrSS [CALL var $ fromIntegral $ length es, PUSH $ Reg EAX]
+    return $ ess . instrSS
+        [ CALL var $ fromIntegral $ length es
+        , BinIns ADD (Lit (dword * fromIntegral (length es))) $ Reg ESP
+        , PUSH $ Reg EAX
+        ]
 
 transExpr (EAnd e1 e2) = do
     falseLabel <- getFreeLabel
@@ -365,6 +424,58 @@ transExpr (EOr e1 e2) = do
 
 transExpr e = throwCM $ show e
 
+getExprType :: Expr -> CM Type
+getExprType (EVar (Ident var)) = do
+    env <- ask
+    case M.lookup var (varMem env) of
+        Nothing     -> throwCM "Impossible getExprType (EVar (Ident var))"
+        Just (_, t) -> return t
+
+getExprType (ELitInt _)            = return Int
+
+getExprType ELitTrue               = return Bool
+
+getExprType ELitFalse              = return Bool
+
+-- getExprType (ENewCls t@(ClsType ident)) = return t
+
+-- getExprType (ENewArr t     _          ) = return (ArrType t)
+
+getExprType (EApp (Ident ident) _) = do
+    state <- get
+    case M.lookup ident (funRet state) of
+        Nothing -> throwCM "Impossible getExprType (EVar (Ident var))"
+        Just t  -> return t
+
+-- getExprType (EPropApp expr ident _    ) = do
+--     (ClsType t) <- getExprType expr
+--     clt         <- getClassType t
+--     return $ retType $ case M.lookup ident (fenv clt) of
+--         (Just x) -> x
+--         Nothing  -> error "Fun in cls fenv lookup!"
+-- getExprType (EProp expr ident) = do
+--     t <- getExprType expr
+--     case t of
+--         (ClsType name) -> do
+--             clt <- getClassType name
+--             return $ vtype $ case M.lookup ident (venv clt) of
+--                 (Just x) -> x
+--                 Nothing  -> error "EProp lookup in getExprType (EProp ...)"
+--         (ArrType _) -> return Int  -- The only property is "length", already checked by StaticChecker
+-- getExprType (EArrGet e _) = do
+--     (ArrType t) <- getExprType e
+--     return t
+-- getExprType (ENullCast ident) = return $ ClsType ident
+getExprType (EString _)      = return Str
+getExprType (Neg     _)      = return Int
+getExprType (Not     _)      = return Bool
+getExprType EMul{}           = return Int
+getExprType (EAdd e Plus  _) = getExprType e
+getExprType (EAdd e Minus _) = return Int
+getExprType ERel{}           = return Bool
+getExprType EAnd{}           = return Bool
+getExprType EOr{}            = return Bool
+
 -- TODO: jak są stałe, to teoretycznie nie trzebaby ich push/pop tylko wpisać żywcem D: jebać
 binOp ops ret = instrSS $ [POP $ Reg ECX, POP $ Reg EAX] ++ ops ++ [PUSH ret]
 
@@ -400,11 +511,12 @@ instance Show Memory where
     show (Local n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
     show (Stack n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
 
-data Operand = Reg Register | Mem Memory | Lit Integer
+data Operand = Reg Register | Mem Memory | Lit Integer | StrLit Integer
 instance Show Operand where
-    show (Reg r) = show r
-    show (Mem m) = show m
-    show (Lit l) = '$' : show l
+    show (Reg    r) = show r
+    show (Mem    m) = show m
+    show (Lit    l) = '$' : show l
+    show (StrLit i) = '$' : show (StrLabel i "")
 
 data JOp = JL | JLE | JG | JGE | JE | JNE | JMP deriving Show
 data BinOp = ADD | SUB | MUL | DIV | XOR | CMP -- deriving Show -- deriving Eq  --  SAL
@@ -424,10 +536,11 @@ instance Show UnOp where
 
 data ZOp = RET | CDQ deriving Show
 
-data Label = FuncLabel String | JmpLabel Integer -- | BranchLabel Integer
+data Label = FuncLabel String | JmpLabel Integer  | StrLabel Integer String
 instance Show Label where
-    show (FuncLabel f) = f
-    show (JmpLabel  i) = ".L" ++ show i
+    show (FuncLabel f ) = f
+    show (JmpLabel  i ) = ".L" ++ show i
+    show (StrLabel i _) = ".LC" ++ show i
 
 data Instr = Intro
     | Prologue
@@ -459,7 +572,8 @@ instance Show Instr where
     show (Jump  unop unin) = show unop ++ " " ++ show unin
     show (BinIns bop bin1 bin2) =
         show bop ++ " " ++ show bin1 ++ ", " ++ show bin2
-    show (Lab l) = show l ++ ":"
+    show (Lab l@(StrLabel _i s)) = show l ++ ":\n    .string " ++ show s
+    show (Lab l                ) = show l ++ ":"
 
 dword = 4
 
