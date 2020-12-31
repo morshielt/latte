@@ -5,7 +5,7 @@ module Compiler
 where
 
 import           AbsLatte
-
+import           SACommon                       ( TCType )
 
 import           Control.Monad.Reader
 import           Control.Monad.State
@@ -21,17 +21,25 @@ import           Data.Map                      as M
                                                 , elems
                                                 , fromList
                                                 )
---TODO: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD
-
+--DONE: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD nie da się
+--TODO: zmienne o nazwie self w metodach!
 type Var = String
 type Offset = Integer
 -- type Label = Integer
 type Scope = Integer
 type VM = M.Map Var (Memory, Type)
+type VT = M.Map Var Type
+type SL = M.Map String Label
+type CD = M.Map Var CDef
+
+data CDef = CDef
+    { attrs :: VT
+    , meths :: VT
+    , extends :: Maybe Var
+    }  deriving Show
 
 data CEnv = CEnv
-  {
-    scope :: Scope
+  { scope :: Scope
   , varMem :: VM
     -- , stack :: Integer
   } --deriving Show
@@ -43,8 +51,9 @@ data CState = CState
   , maxStack :: Integer
   , maxArgs :: Integer
   , retLabel :: String
-  , strings :: M.Map String Label
-  , funRet :: M.Map Var Type
+  , strings :: SL
+  , funRet :: VT
+  , cDefs :: CD
 --   , ins :: InstrS
   } --deriving Show
 
@@ -57,9 +66,11 @@ throwCM = lift . lift . throwE
 
 compile (Program prog) = evalStateT
     (runReaderT (go prog) (CEnv 0 M.empty))
-    (CState 0 0 0 0 0 "" M.empty predefinedFns)
+    (CState 0 0 0 0 0 "" M.empty predefinedFns M.empty)
   where
-    go prog = flip ($) [] <$> genExpr prog >>= x86
+    go prog = do
+        saveClassesMembers prog
+        flip ($) [] <$> genExpr prog >>= x86
     predefinedFns :: M.Map Var Type
     predefinedFns = M.fromList
         [ ("printInt"     , Void)
@@ -70,6 +81,33 @@ compile (Program prog) = evalStateT
         , ("concatStrings", Str) --TODO: nazwa lepsza czy coś
         ]
 
+extractExt :: ClassExt -> Maybe Var
+extractExt ext = case ext of
+    NoExt              -> Nothing
+    Ext (Ident parent) -> Just parent
+
+saveClassesMembers :: [TopDef] -> CM ()
+saveClassesMembers = mapM_ saveClassMembers
+  where
+    saveClassMembers :: TopDef -> CM ()
+    saveClassMembers FnDef{} = return ()
+    saveClassMembers (ClDef (Ident ident) classext clmembers) = do
+        clss           <- gets cDefs
+        (attrs, meths) <- foldM saveClassMember ([], []) clmembers
+        let cdef = CDef { extends = extractExt classext
+                        , attrs   = M.fromList attrs
+                        , meths   = M.fromList meths
+                        }
+        modify (\st -> st { cDefs = M.insert ident cdef clss })
+    saveClassMember
+        :: ([(Var, Type)], [(Var, Type)])
+        -> ClMember
+        -> CM ([(Var, Type)], [(Var, Type)])
+    saveClassMember (attrs, meths) member = case member of
+        Attr type_ (Ident ident) -> return (attrs ++ [(ident, type_)], meths) -- TODO: spr. czy dodawanie przez : działa tak samo (bo by lepsze było)
+        Meth ret (Ident ident) args _ -> do
+            let type_ = Fun ret (map (\(Arg t _) -> t) args)
+            return (attrs, meths ++ [(ident, type_)])
 
 
 genExpr :: [TopDef] -> CM InstrS
@@ -77,6 +115,7 @@ genExpr tds = do
     code <- foldM go id tds
     strs <- gets strings
     let strLabels = map Lab $ M.elems strs
+    -- TODO: stringi w sekcji .data, sekcja text po nich!
     return $ instrS Intro . instrSS strLabels . code
 
   where
@@ -255,9 +294,11 @@ transStmt x = case x of
         defaultValue :: Type -> CM Operand
         defaultValue Int  = return $ Lit 0
         defaultValue Bool = return falseLit
-        defaultValue Str  = StrLit <$> getStrLabel ""
-        defaultValue x =
-            throwCM $ "defaultValue for " ++ show x ++ " not impl yet"
+        defaultValue _    = return nullPtr -- StrLit <$> getStrLabel ""
+        -- defaultValue x =
+        --     throwCM $ "defaultValue for " ++ show x ++ " not impl yet"
+
+nullPtr = Lit 0
 
 transAssignable :: Expr -> CM (Memory, InstrS)
 transAssignable (EVar (Ident var)) = do
@@ -572,7 +613,7 @@ instance Show Instr where
     show (Jump  unop unin) = show unop ++ " " ++ show unin
     show (BinIns bop bin1 bin2) =
         show bop ++ " " ++ show bin1 ++ ", " ++ show bin2
-    show (Lab l@(StrLabel _i s)) = show l ++ ":\n    .string " ++ show s
+    show (Lab l@(StrLabel _i s)) = show l ++ ":\n    .asciz " ++ show s -- ew. .asciz, no idea
     show (Lab l                ) = show l ++ ":"
 
 dword = 4

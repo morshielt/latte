@@ -18,6 +18,7 @@ import           Data.Map                      as M
                                                 , empty
                                                 , lookup
                                                 , union
+                                                , toList
                                                 )
 
 
@@ -151,12 +152,35 @@ checkClassDefsM ss = do
     checkClassDefM :: TopDef -> TCM TCEnv
     checkClassDefM FnDef{} = ask
     checkClassDefM (ClDef (Ident ident) classext clmembers) = do
-        env  <- ask
-        env' <- foldM (goAddAttrsToEnv ident) env clmembers
-        foldM_ (goCheckMethods ident) env' clmembers
+        env   <- ask
+        env'  <- addParentAttributes ident
+        env'' <- foldM (goAddAttrsToEnv ident) env' clmembers
+        foldM_ (goCheckMethods ident) env'' clmembers
         ask
       where
         msg e = "in class `" ++ ident ++ "` " ++ e
+        addParentAttributes :: Var -> TCM TCEnv
+        addParentAttributes cls = do
+            clsDef <- getSureClassDef cls
+            attrs  <- getAllAttrs clsDef
+            env    <- ask
+            return env { types = M.union (M.fromList attrs) $ types env }
+        getAllAttrs clsDef = case extends clsDef of
+            Nothing     -> return []
+            Just parent -> do
+                parentDef <- getSureClassDef parent
+                parAtrs   <- getClsAttrs parentDef
+                restAtrs  <- getAllAttrs parentDef
+                return $ parAtrs ++ restAtrs
+        getClsAttrs :: ClassDef -> TCM [(Var, (TCType, Scope))]
+        getClsAttrs clsDef =
+            return
+                $ map (\(i, t) -> (i, (t, initScope + 1)))
+                $ filter notFun
+                $ M.toList
+                $ members clsDef
+        notFun (_, TDFun{}) = False
+        notFun _            = True
 
         goAddAttrsToEnv :: Var -> TCEnv -> ClMember -> TCM TCEnv
         goAddAttrsToEnv ident env cmembers =
@@ -168,6 +192,8 @@ checkClassDefsM ss = do
                 clsDef <- getSureClassDef cls
                 t      <- typeToTCType type_
                 env    <- ask
+                local (\env -> env { scope = initScope + 1 })
+                    $ checkIfNameAlreadyInScope ident
                 return env
                     { types = M.insert ident (t, initScope + 1) $ types env
                     }
