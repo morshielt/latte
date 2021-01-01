@@ -10,9 +10,9 @@ TRUE_OUT1=""
 strings=(
     "lattests201003/lattests/good"
     # "lattests201003/lattests/extensions/arrays1"
-    # "lattests201003/lattests/extensions/objects1"
+    "lattests201003/lattests/extensions/objects1"
     "lattests201003/lattests/extensions/objects2"
-    # "lattests201003/lattests/extensions/struct"
+    "lattests201003/lattests/extensions/struct"
     # "mrjp-tests-master/good/arrays"
     "mrjp-tests-master/good/basic"
     ## "mrjp-tests-master/good/hardcore" #tych nie chcemy bo to na optymalizacje są
