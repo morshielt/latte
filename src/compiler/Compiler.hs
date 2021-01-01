@@ -23,6 +23,7 @@ import           Data.Map                      as M
                                                 , fromList
                                                 , toList
                                                 )
+--TODO: wywołanie error() liczy się jako return w return checkerze!!!
 --DONE: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD nie da się
 --TODO: zmienne o nazwie self w metodach!
 type Var = String
@@ -290,16 +291,16 @@ transStmt x = case x of
         return
             ( env
             , accCode . exprCode . instrSS
-                [POP $ Reg EAX, POP $ Reg EDX, MOV (Reg EAX) $ Addr EDX]
+                [POP $ Reg EAX, POP $ Reg EDX, MOV (Reg EAX) $ Addr 0 EDX]
             )
     Incr ass -> do
         accCode <- transAccessible ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
         env     <- ask
-        return (env, accCode . instrSS [POP $ Reg EAX, UnIns INC $ Addr EAX])
+        return (env, accCode . instrSS [POP $ Reg EAX, UnIns INC $ Addr 0 EAX])
     Decr ass -> do
         accCode <- transAccessible ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
         env     <- ask
-        return (env, accCode . instrSS [POP $ Reg EAX, UnIns DEC $ Addr EAX])
+        return (env, accCode . instrSS [POP $ Reg EAX, UnIns DEC $ Addr 0 EAX])
     BStmt (Block ss) -> do
         env <- ask
         local (\env -> env { scope = scope env + 1 }) $ transStmts ss
@@ -366,17 +367,49 @@ transAccessible (EVar (Ident var)) = do
         Just (loc, _) ->
             return $ instrSS [LEA (Mem loc) $ Reg EAX, PUSH $ Reg EAX]
 -- TODO: tablice/pole ogarnąć instrukcje kolejność no
-transAccessible _ = throwCM "Not an assignable or not implemented"
+transAccessible (EAttrAcc expr@(ENew _ ClsNotArr) (Ident attr)) = do
+    Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
+    accCode         <- transAccessible expr
+    vmts            <- gets vmts
+    case M.lookup cls vmts of
+        Nothing  -> throwCM "Impossible transEAttrAcc vmts"
+        Just vmt -> case M.lookup attr $ vattrs vmt of
+            Nothing     -> throwCM "Impossible transEAttrAcc cls"
+            Just (_, i) -> return $ accCode . instrSS
+                [ POP $ Reg EAX
+                -- , MOV (Addr 0 EAX) $ Reg EDX
+                , LEA (AttrAddr i EAX) $ Reg EDX
+                , PUSH $ Reg EDX
+                ]
+transAccessible (EAttrAcc expr (Ident attr)) = do
+    Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
+    accCode         <- transAccessible expr
+    vmts            <- gets vmts
+    case M.lookup cls vmts of
+        Nothing  -> throwCM "Impossible transEAttrAcc vmts"
+        Just vmt -> case M.lookup attr $ vattrs vmt of
+            Nothing     -> throwCM "Impossible transEAttrAcc cls"
+            Just (_, i) -> return $ accCode . instrSS
+                [ POP $ Reg EAX
+                , MOV (Addr 0 EAX) $ Reg EDX
+                , LEA (AttrAddr i EDX) $ Reg EAX
+                , PUSH $ Reg EAX
+                ]
 
--- findInAnyScope :: Var -> Scope -> CM Memory
--- findInAnyScope var (-1) = throwCM "Impossible findInAnyScope"
--- findInAnyScope var sco  = do
---     state <- get
---     case M.lookup (var, sco) (varMem state) of
---         Nothing  -> findInAnyScope var $ sco - 1
---         Just loc -> return loc
-
---TODO: return expr w eax i wtedy push tylko jak złożony i potem brać bez popa tylko od razu z eax ogar.
+transAccessible (ENew (Cls (Ident clsName)) ClsNotArr) = do
+    vmts <- gets vmts
+    case M.lookup clsName vmts of
+        Nothing  -> throwCM "Impossible ENew Class"
+        Just vmt -> do
+            let numMem = fromIntegral $ M.size $ vattrs vmt
+            return $ instrSS
+                [ PUSH $ Lit dword
+                , PUSH $ Lit numMem
+                , CALL "calloc" 2
+                , BinIns ADD (Lit $ dword * 2) $ Reg ESP
+                , PUSH $ Reg EAX
+                ]
+transAccessible _ = throwCM "Not an transAccessible or not implemented"
 
 getStrLabel :: String -> CM Integer
 getStrLabel str = do
@@ -388,19 +421,21 @@ getStrLabel str = do
             return i
         Just (StrLabel i str) -> return i
 
+--TODO: return expr w eax i wtedy push tylko jak złożony i potem brać bez popa tylko od razu z eax ogar.
 --TODO: na koniec: spróbować zamienić PUSH rzecz na MOV rzecz do EAX, a w stmtach pop na użycie EAX bezpośrednie
 transExpr :: Expr -> CM InstrS
-transExpr (EAttrAcc expr (Ident ident))
+transExpr eattr@(EAttrAcc expr (Ident ident))
     | ident == "length" = do
         type_ <- getExprType expr
         case type_ of
             (Arr _) -> throwCM ".length arr unimplemented"
-            _       -> transEAttrAcc expr ident
-    | otherwise = transEAttrAcc expr ident
+            _       -> transEAttrAcc eattr
+    | otherwise = transEAttrAcc eattr
   where
-    transEAttrAcc expr attr = do
-
-        return $ instrSS []
+    transEAttrAcc :: Expr -> CM InstrS
+    transEAttrAcc eattr = do
+        accCode <- transAccessible eattr
+        return $ accCode . instrSS [POP $ Reg EAX, PUSH $ AttrAddr 0 EAX]
 
 transExpr (ENew (Cls (Ident clsName)) ClsNotArr) = do
     vmts <- gets vmts
@@ -582,6 +617,17 @@ getExprType (EApp (Ident ident) _) = do
 --     return $ retType $ case M.lookup ident (fenv clt) of
 --         (Just x) -> x
 --         Nothing  -> error "Fun in cls fenv lookup!"
+
+getExprType (EAttrAcc expr (Ident attr)) = do
+    Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
+    accCode         <- transAccessible expr
+    vmts            <- gets vmts
+    case M.lookup cls vmts of
+        Nothing  -> throwCM "Impossible getExprType vmts"
+        Just vmt -> case M.lookup attr $ vattrs vmt of
+            Nothing     -> throwCM "Impossible getExprType cls"
+            Just (t, _) -> return t
+
 -- getExprType (EProp expr ident) = do
 --     t <- getExprType expr
 --     case t of
@@ -604,7 +650,7 @@ getExprType (EAdd e Minus _) = return Int
 getExprType ERel{}           = return Bool
 getExprType EAnd{}           = return Bool
 getExprType EOr{}            = return Bool
-
+getExprType x                = throwCM $ show x
 -- TODO: jak są stałe, to teoretycznie nie trzebaby ich push/pop tylko wpisać żywcem D: jebać
 binOp ops ret = instrSS $ [POP $ Reg ECX, POP $ Reg EAX] ++ ops ++ [PUSH ret]
 
@@ -640,13 +686,16 @@ instance Show Memory where
     show (Local n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
     -- show (Stack n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
 
-data Operand = Reg Register | Addr Register | Mem Memory | Lit Integer | StrLit Integer
+data Operand = Reg Register | AttrAddr Integer Register | Addr Integer Register | Mem Memory | Lit Integer | StrLit Integer
 instance Show Operand where
-    show (Reg    r) = show r
-    show (Addr   r) = "(" ++ show r ++ ")"
-    show (Mem    m) = show m
-    show (Lit    l) = '$' : show l
-    show (StrLit i) = '$' : show (StrLabel i "")
+    show (Reg r       ) = show r
+    show (Addr     0 r) = "(" ++ show r ++ ")"
+    show (Addr     i r) = show (-dword * i) ++ "(" ++ show r ++ ")"
+    show (AttrAddr 0 r) = error "Didn't you mean Addr?"
+    show (AttrAddr i r) = show (dword * i) ++ "(" ++ show r ++ ")"
+    show (Mem    m    ) = show m
+    show (Lit    l    ) = '$' : show l
+    show (StrLit i    ) = '$' : show (StrLabel i "")
 
 data JOp = JL | JLE | JG | JGE | JE | JNE | JMP deriving Show
 data BinOp = ADD | SUB | MUL | DIV | XOR | CMP -- deriving Show -- deriving Eq  --  SAL
@@ -664,7 +713,10 @@ instance Show UnOp where
     show INC = "incl "
     show DEC = "decl "
 
-data ZOp = RET | CDQ deriving Show
+data ZOp = RET | CDQ
+instance Show ZOp where
+    show RET = "ret\n"
+    show CDQ = "cdq"
 
 data Label = FuncLabel String | JmpLabel Integer  | StrLabel Integer String
 instance Show Label where
