@@ -484,15 +484,20 @@ transAccessible (EMethCall expr (Ident name) es) = do
     case M.lookup cls vmts of
         Nothing  -> throwCM "Impossible transAccessible EMethCall"
         Just vmt -> do
-            (methodOwner, pushReturn) <-
+            (offset, methodOwner, pushReturn) <-
                 case M.lookup name (M.fromList $ vmeths vmt) of
                     Nothing ->
                         throwCM "Impossible transAccessible EMethCall name"
-                    Just (Fun t _, _, methodOwner) -> if t == Void
+                    Just (Fun t _, offset, methodOwner) -> if t == Void
                         then do
                             throwCM "How would you use void as lvalue?"
-                            return (methodOwner, id)
-                        else return (methodOwner, instrS $ PUSH $ Addr 0 EAX)
+                            return (offset, methodOwner, id)
+                        else
+                            return
+                                ( offset
+                                , methodOwner
+                                , instrS $ PUSH $ Addr 0 EAX
+                                )
 
             return
                 $ ess
@@ -500,9 +505,17 @@ transAccessible (EMethCall expr (Ident name) es) = do
                 -- . code
                 . instrSS
                       [ -- PUSH $ Mem $ Local 1 -- SELF , 
-                        CALL (methodLabel methodOwner name)
-                      $ fromIntegral
-                      $ length es --TODO:FIXME: CALL metoedy z VTABLE A NIE NA PAŁĘ!!! i inicjalizować vtable przy new!!!
+                    --     CALL (methodLabel methodOwner name)
+                    --   $ fromIntegral
+                    --   $ length es --TODO:FIXME: CALL metoedy z VTABLE A NIE NA PAŁĘ!!! i inicjalizować vtable przy new!!!
+                        POP $ Reg EAX
+                    --   , PUSH $ Reg EAX
+                      , PUSH $ Reg EAX
+                    --   , LEA (Addr 0 EAX) (Reg EAX)
+                    --   , LEA (Addr 0 EAX) (Reg EAX)
+                      , MOV (Addr 0 EAX) (Reg EAX)
+                    --   , 
+                      , CALLM (MethAddr offset EAX) $ fromIntegral $ length es --TODO:FIXME: CALL metoedy z VTABLE A NIE NA PAŁĘ!!! i inicjalizować vtable przy new!!!
                       , BinIns
                               ADD
                               (Lit (dword * (1 + fromIntegral (length es))))
@@ -546,6 +559,7 @@ transAccessible (ENew (Cls (Ident clsName)) ClsNotArr) = do
                 , PUSH $ Lit numMem
                 , CALL "calloc" 2
                 , BinIns ADD (Lit $ dword * 2) $ Reg ESP
+                , MOV (VTMLit $ vmtLabel clsName) $ Addr 0 EAX
                 , PUSH $ Reg EAX
                 ]
 transAccessible e =
@@ -591,22 +605,28 @@ transExpr (EMethCall expr (Ident name) es) = do
     case M.lookup cls vmts of
         Nothing  -> throwCM "Impossible transAccessible EMethCall"
         Just vmt -> do
-            (methodOwner, pushReturn) <-
+            (offset, methodOwner, pushReturn) <-
                 case M.lookup name (M.fromList $ vmeths vmt) of
                     Nothing ->
                         throwCM "Impossible transAccessible EMethCall name"
-                    Just (Fun t _, _, methodOwner) -> if t == Void
-                        then return (methodOwner, id)
-                        else return (methodOwner, instrS $ PUSH $ Reg EAX)
+                    Just (Fun t _, offset, methodOwner) -> if t == Void
+                        then return (offset, methodOwner, id)
+                        else return
+                            (offset, methodOwner, instrS $ PUSH $ Reg EAX)
 
             return
                 $ ess
                 . accCode
                 . instrSS
                       [ -- PUSH $ Mem $ Local 1 -- SELF , 
-                        CALL (methodLabel methodOwner name)
-                      $ fromIntegral
-                      $ length es --TODO:FIXME: CALL metoedy z VTABLE A NIE NA PAŁĘ!!! i inicjalizować vtable przy new!!!
+                        POP $ Reg EAX
+                    --   , PUSH $ Reg EAX
+                      , PUSH $ Reg EAX
+                    --   , LEA (Addr 0 EAX) (Reg EAX)
+                    --   , LEA (Addr 0 EAX) (Reg EAX)
+                      , MOV (Addr 0 EAX) (Reg EAX)
+                    --   , 
+                      , CALLM (MethAddr offset EAX) $ fromIntegral $ length es --TODO:FIXME: CALL metoedy z VTABLE A NIE NA PAŁĘ!!! i inicjalizować vtable przy new!!!
                       , BinIns
                               ADD
                               (Lit (dword * (1 + fromIntegral (length es))))
@@ -641,6 +661,7 @@ transExpr (ENew (Cls (Ident clsName)) ClsNotArr) = do
                 , PUSH $ Lit numMem
                 , CALL "calloc" 2
                 , BinIns ADD (Lit $ dword * 2) $ Reg ESP
+                , MOV (VTMLit $ vmtLabel clsName) $ Addr 0 EAX
                 , PUSH $ Reg EAX
                 ]
 
@@ -881,16 +902,18 @@ instance Show Memory where
     show (Attribute n) = show (dword * n) ++ "(" ++ show EAX ++ ")" --TODO: check czy EAX ale no powinien.
     -- show (Stack n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
 
-data Operand = Reg Register | AttrAddr Integer Register | Addr Integer Register | MethAddr Integer Register  | Mem Memory | Lit Integer | StrLit Integer
+data Operand = Reg Register | AttrAddr Integer Register | Addr Integer Register | MethAddr Integer Register  | Mem Memory | Lit Integer | StrLit Integer | VTMLit String
 instance Show Operand where
     show (Reg r       ) = show r
     show (Addr     0 r) = "(" ++ show r ++ ")"
     show (Addr     i r) = show (-dword * i) ++ "(" ++ show r ++ ")"
     show (AttrAddr 0 r) = error "Didn't you mean Addr?"
     show (AttrAddr i r) = show (dword * i) ++ "(" ++ show r ++ ")"
+    show (MethAddr 0 r) = '*' : "(" ++ show r ++ ")"
     show (MethAddr i r) = '*' : show (dword * i) ++ "(" ++ show r ++ ")"
     show (Mem    m    ) = show m
     show (Lit    l    ) = '$' : show l
+    show (VTMLit l    ) = '$' : l
     show (StrLit i    ) = '$' : show (StrLabel i "")
 
 data JOp = JL | JLE | JG | JGE | JE | JNE | JMP deriving Show
@@ -925,6 +948,7 @@ data Instr = Intro
     | StackAlloc Integer
     | Epilogue
     | CALL String Integer
+    | CALLM Operand Integer
     | MOV Operand Operand
     | LEA Operand Operand
     | PUSH Operand
@@ -943,9 +967,10 @@ instance Show Instr where
     show (StackAlloc n) = show $ BinIns SUB (Lit (dword * n)) $ Reg ESP --TODO: align 16
     show Epilogue =
         show (MOV (Reg EBP) $ Reg ESP) ++ "\n\t" ++ show (POP $ Reg EBP)
-    show (CALL l _       ) = "call " ++ l
-    show (MOV  o r       ) = "movl " ++ show o ++ ", " ++ show r
-    show (LEA  o r       ) = "leal " ++ show o ++ ", " ++ show r
+    show (CALL  l _      ) = "call " ++ l
+    show (CALLM l _      ) = "call " ++ show l
+    show (MOV   o r      ) = "movl " ++ show o ++ ", " ++ show r
+    show (LEA   o r      ) = "leal " ++ show o ++ ", " ++ show r
     show (PUSH op        ) = "pushl " ++ show op
     show (POP  op        ) = "popl " ++ show op
     show (ZIns zin       ) = show zin
