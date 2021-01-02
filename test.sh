@@ -4,20 +4,20 @@ EXPECT="OK"
 ERROR=""
 TRUE_OUT=""
 TRUE_OUT1=""
-
+CTR=1
 
 
 strings=(
     "lattests201003/lattests/good"
     # "lattests201003/lattests/extensions/arrays1"
     "lattests201003/lattests/extensions/objects1"
-    "lattests201003/lattests/extensions/objects2"
+    # "lattests201003/lattests/extensions/objects2"
     "lattests201003/lattests/extensions/struct"
     # "mrjp-tests-master/good/arrays"
     "mrjp-tests-master/good/basic"
     ## "mrjp-tests-master/good/hardcore" #tych nie chcemy bo to na optymalizacje są
     # "mrjp-tests-master/good/virtual"
-    # "mrjp-tests-master/gr5" #dziwna ta grupa5
+    ## "mrjp-tests-master/gr5" #dziwna ta grupa5
 )
 
 for dir in "${strings[@]}"; do
@@ -33,7 +33,8 @@ for dir in "${strings[@]}"; do
 
         if [ "$EXPECT" != "$ERROR" ]
         then
-            echo [ERROR] $filename 
+            echo [$CTR ERROR] $filename 
+            CTR=$((CTR+1))
             # echo $ERROR
         else
             gcc -m32 lib/runtime.o ${filename%%.*}.s -o ${filename%%.*}
@@ -60,7 +61,8 @@ for dir in "${strings[@]}"; do
                 echo "$TRUE_OUT"
                 echo "--------------------------"
                 # echo $ERROR
-            echo [ASM] $filename
+            echo [$CTR ASM] $filename
+            CTR=$((CTR+1))
             fi
             # echo [OK] $filename
         fi

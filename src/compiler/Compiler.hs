@@ -12,7 +12,9 @@ import           Control.Monad.State
 import           Control.Monad.Except
 import           Control.Monad.Trans.Except
 import           Data.Bits                      ( (.&.) )
-import           Data.List                      ( nubBy )
+import           Data.List                      ( nubBy
+                                                , intercalate
+                                                )
 import           Data.Map                      as M
                                                 ( Map
                                                 , empty
@@ -22,10 +24,12 @@ import           Data.Map                      as M
                                                 , elems
                                                 , fromList
                                                 , toList
+                                                , union
                                                 )
 --TODO: wywołanie error() liczy się jako return w return checkerze!!!
 --DONE: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD nie da się
 --TODO: zmienne o nazwie self w metodach!
+--TODO: porównanie stringów to porównanie referencji czy zawartości?
 type Var = String
 type Offset = Integer
 -- type Label = Integer
@@ -43,7 +47,7 @@ data CDef = CDef
 
 data VMT = VMT
  {  vmeths :: [ (Var, (Type, Integer, Var))]
-    , vattrs :: M.Map Var (Type, Integer)
+    , vattrs :: M.Map Var (Memory, Type)
 }
 
 data CEnv = CEnv
@@ -79,8 +83,8 @@ compile (Program prog) = evalStateT
   where
     go prog = do
         saveClassesMembers prog
-        createVMTs
-        flip ($) [] <$> translate prog >>= x86
+        vmtsCode <- createVMTs
+        flip ($) [] <$> translate vmtsCode prog >>= x86
     predefinedFns :: M.Map Var Type
     predefinedFns = M.fromList
         [ ("printInt"     , Void)
@@ -91,17 +95,45 @@ compile (Program prog) = evalStateT
         , ("concatStrings", Str) --TODO: nazwa lepsza czy coś
         ]
 
-createVMTs :: CM ()
+createVMTs :: CM InstrS
 createVMTs = do
     cDefs <- gets cDefs
     mapM_ createVMT $ M.toList cDefs
+    vmts <- gets vmts
+    let
+        clsVmeths =
+            map
+                    (\(v, vmt) ->
+                        ( v
+                        , map
+                            (\(meth, (_, _, methOwner)) ->
+                                methodLabel methOwner meth
+                            )
+                            (vmeths vmt)
+                        )
+                    )
+                $ M.toList vmts
+    -- let instrs = map (\cls meths -> [Label vmtLabel cls, VTable meths] clsVmeths
+    let instrs = map
+            (\(cls, meths) ->
+                instrSS [Lab $ FuncLabel (vmtLabel cls), VMTable meths]
+            )
+            clsVmeths
+    return $ foldr (.) id instrs
+
+
+vmtLabel :: Var -> String
+vmtLabel cls = methodLabel cls "VMT"
 
 createVMT :: (Var, CDef) -> CM () --TODO: można odkwadracić jak bd obliczać dla parentów przede mną i korzystać z ich wyniku
 createVMT (cls, cDef) = do
     let vmt = VMT { vmeths = [], vattrs = M.empty }
     asms <- getParentMembers (Just cls)
-    let (as, ms)  = unzip asms
-    let as' = zipWith (\(k, t) i -> (k, (t, i))) (concat $ reverse as) [1 ..] -- TODO: od 1 bo 0 to adres Vtable? a co jak nie ma żadnych metod? też vtable?
+    let (as, ms) = unzip asms
+    let
+        as' = zipWith (\(k, t) i -> (k, (Attribute i, t)))
+                      (concat $ reverse as)
+                      [1 ..] -- TODO: od 1 bo 0 to adres Vtable? a co jak nie ma żadnych metod? też vtable?
     let ms'       = concat $ reverse ms
     let orderedMs = map fst $ nubBy (\(m1, _) (m2, _) -> m1 == m2) ms'
     let goodClsMs = M.fromList ms'
@@ -134,8 +166,6 @@ getParentMembers (Just cls) = do
                 : asms
                 )
 
-
-
 extractExt :: ClassExt -> Maybe Var
 extractExt ext = case ext of
     NoExt              -> Nothing
@@ -145,7 +175,9 @@ saveClassesMembers :: [TopDef] -> CM ()
 saveClassesMembers = mapM_ saveClassMembers
   where
     saveClassMembers :: TopDef -> CM ()
-    saveClassMembers FnDef{} = return ()
+    saveClassMembers (FnDef ret (Ident name) _ _) = do
+        modify (\st -> st { funRet = M.insert name ret $ funRet st })
+        return ()
     saveClassMembers (ClDef (Ident ident) classext clmembers) = do
         clss           <- gets cDefs
         (attrs, meths) <- foldM saveClassMember ([], []) clmembers
@@ -165,9 +197,9 @@ saveClassesMembers = mapM_ saveClassMembers
             return (attrs, meths ++ [(ident, type_)])
 
 
-translate :: [TopDef] -> CM InstrS
-translate tds = do
-    code <- foldM go id tds
+translate :: InstrS -> [TopDef] -> CM InstrS
+translate vmtsCode tds = do
+    code <- foldM go vmtsCode tds
     strs <- gets strings
     let strLabels = map Lab $ M.elems strs
     -- TODO: stringi w sekcji .data, sekcja text po nich!
@@ -181,12 +213,7 @@ translate tds = do
 transTopDef :: TopDef -> CM InstrS
 transTopDef x = case x of
     FnDef ret (Ident name) args b -> do
-        modify
-            (\st -> st { locals   = 0
-                       , retLabel = "ret_" ++ name
-                       , funRet   = M.insert name ret $ funRet st
-                       }
-            )
+        modify (\st -> st { locals = 0, retLabel = "ret_" ++ name })
         --TODO: dodać se argumenty do varMem XD
         (_, code) <- local
             (\env -> env
@@ -204,10 +231,48 @@ transTopDef x = case x of
                   [Lab $ FuncLabel name, Prologue, StackAlloc $ locals state]
             . code
             . instrSS [Lab $ FuncLabel $ retLabel state, Epilogue, ZIns RET]
-    ClDef (Ident clsName) _ clmembers -> return id
+    ClDef (Ident clsName) _ clmembers -> do
+        x <- mapM (transMethods clsName) clmembers
+        return $ foldr (.) id x
 
+transMethods :: Var -> ClMember -> CM InstrS
+transMethods _   Attr{}                         = return id
+transMethods cls (Meth ret (Ident name) args b) = do
+    modify
+        (\st -> st { locals   = 0
+                   , retLabel = "ret_" ++ methodLabel cls name
+                   , funRet   = M.insert name ret $ funRet st
+                   }
+        )
+    vmts <- gets vmts
+    case M.lookup cls vmts of
+        Nothing  -> throwCM "Impossible transMethods"
+        Just vmt -> do
+            (_, code) <- local
+                (\env -> env
+                    { varMem = M.union (vattrs vmt)
+                               $ M.insert "self" (Param 1, Cls (Ident cls))
+                               $ M.fromList
+                               $ zipWith
+                                     (\(Arg t (Ident var)) i ->
+                                         (var, (Param i, t))
+                                     )
+                                     args
+                                     [2 ..] -- TODO: od 1 czy od 0?}) 
+                    }
+                )
+                (transStmt (BStmt b))
+            state <- get
+            return
+                $ instrSS
+                      [ Lab $ FuncLabel $ methodLabel cls name
+                      , Prologue
+                      , StackAlloc $ locals state
+                      ]
+                . code
+                . instrSS [Lab $ FuncLabel $ retLabel state, Epilogue, ZIns RET]
 
-
+methodLabel cls method = cls ++ "." ++ method
 
 transStmt :: Stmt -> CM (CEnv, InstrS)
 transStmt x = case x of
@@ -360,41 +425,115 @@ transStmt x = case x of
 nullPtr = Lit 0
 
 transAccessible :: Expr -> CM InstrS
+-- assignable
 transAccessible (EVar (Ident var)) = do
     env <- ask
-    case M.lookup var (varMem env) of
-        Nothing -> throwCM "Impossible transExpr (EVar (Ident var))"
-        Just (loc, _) ->
-            return $ instrSS [LEA (Mem loc) $ Reg EAX, PUSH $ Reg EAX]
+    case M.lookup var (varMem env) of --TODO:atrybut
+        Nothing ->
+            throwCM $ "Impossible transExpr (EVar (Ident var))" ++ show var
+        Just (loc, _) -> case loc of
+            Attribute l ->
+                return
+                    $ instrSS
+                          [ MOV (Mem $ Param 1) $ Reg EAX
+                          , LEA (Mem loc) $ Reg EDX
+                          , PUSH $ Reg EDX
+                          ] -- Param 1 = self
+            _ -> return $ instrSS [LEA (Mem loc) $ Reg EAX, PUSH $ Reg EAX]
+                -- return $ instrS $ PUSH $ Mem loc
+
 -- TODO: tablice/pole ogarnąć instrukcje kolejność no
-transAccessible (EAttrAcc expr@(ENew _ ClsNotArr) (Ident attr)) = do
-    Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
-    accCode         <- transAccessible expr
-    vmts            <- gets vmts
-    case M.lookup cls vmts of
-        Nothing  -> throwCM "Impossible transEAttrAcc vmts"
-        Just vmt -> case M.lookup attr $ vattrs vmt of
-            Nothing     -> throwCM "Impossible transEAttrAcc cls"
-            Just (_, i) -> return $ accCode . instrSS
-                [ POP $ Reg EAX
-                -- , MOV (Addr 0 EAX) $ Reg EDX
-                , LEA (AttrAddr i EAX) $ Reg EDX
-                , PUSH $ Reg EDX
-                ]
+
 transAccessible (EAttrAcc expr (Ident attr)) = do
+    let code i = case expr of
+            EApp{}           -> accessibleCode i
+            EMethCall{}      -> accessibleCode i -- TODO: sprawdzić
+            ENew _ ClsNotArr -> accessibleCode i
+            _                -> assignableCode i
     Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
     accCode         <- transAccessible expr
     vmts            <- gets vmts
     case M.lookup cls vmts of
         Nothing  -> throwCM "Impossible transEAttrAcc vmts"
         Just vmt -> case M.lookup attr $ vattrs vmt of
-            Nothing     -> throwCM "Impossible transEAttrAcc cls"
-            Just (_, i) -> return $ accCode . instrSS
-                [ POP $ Reg EAX
-                , MOV (Addr 0 EAX) $ Reg EDX
-                , LEA (AttrAddr i EDX) $ Reg EAX
-                , PUSH $ Reg EAX
-                ]
+            Nothing               -> throwCM "Impossible transEAttrAcc cls"
+            Just (Attribute i, _) -> return $ accCode . code i
+  where
+    accessibleCode i =
+        instrSS [POP $ Reg EAX, LEA (AttrAddr i EAX) $ Reg EDX, PUSH $ Reg EDX]
+    assignableCode i = instrSS
+        [ POP $ Reg EAX
+        , MOV (Addr 0 EAX) $ Reg EDX
+        , LEA (AttrAddr i EDX) $ Reg EAX
+        , PUSH $ Reg EAX
+        ]
+
+-- -- accessible
+transAccessible (EMethCall expr (Ident name) es) = do
+    -- let code i = case expr of
+    --         EApp{}           -> accessibleCode i
+    --         EMethCall{}      -> accessibleCode i -- TODO: sprawdzić
+    --         ENew _ ClsNotArr -> accessibleCode i
+    --         _                -> assignableCode i
+    Cls (Ident cls) <- getExprType expr
+    accCode         <- transAccessible expr
+    es'             <- mapM transExpr es
+    let ess = foldr (.) id (reverse es')
+    vmts <- gets vmts
+    --TODO: jak fcja/metoda zwraca void to nie pushujemy EAX!
+    case M.lookup cls vmts of
+        Nothing  -> throwCM "Impossible transAccessible EMethCall"
+        Just vmt -> do
+            (methodOwner, pushReturn) <-
+                case M.lookup name (M.fromList $ vmeths vmt) of
+                    Nothing ->
+                        throwCM "Impossible transAccessible EMethCall name"
+                    Just (Fun t _, _, methodOwner) -> if t == Void
+                        then do
+                            throwCM "How would you use void as lvalue?"
+                            return (methodOwner, id)
+                        else return (methodOwner, instrS $ PUSH $ Addr 0 EAX)
+
+            return
+                $ ess
+                . accCode
+                -- . code
+                . instrSS
+                      [ -- PUSH $ Mem $ Local 1 -- SELF , 
+                        CALL (methodLabel methodOwner name)
+                      $ fromIntegral
+                      $ length es --TODO:FIXME: CALL metoedy z VTABLE A NIE NA PAŁĘ!!! i inicjalizować vtable przy new!!!
+                      , BinIns
+                              ADD
+                              (Lit (dword * (1 + fromIntegral (length es))))
+                          $ Reg ESP
+                      ]
+                . pushReturn
+--   where
+--     accessibleCode i =
+--         instrSS [POP $ Reg EAX, LEA (AttrAddr i EAX) $ Reg EDX, PUSH $ Reg EDX]
+--     assignableCode i = instrSS
+--         [ POP $ Reg EAX
+--         , MOV (Addr 0 EAX) $ Reg EDX
+--         , LEA (AttrAddr i EDX) $ Reg EAX
+--         , PUSH $ Reg EAX
+--         ]
+
+transAccessible (EApp (Ident var) es) = do
+    es' <- mapM transExpr es
+    let ess = foldr (.) id (reverse es')
+    funRet  <- gets funRet
+    retCode <- case M.lookup var funRet of
+        Nothing -> throwCM "How would you use void as lvalue?//2"
+        Just t ->
+            if t == Void then return id else return $ instrS $ PUSH $ Addr 0 EAX
+    return
+        $ ess
+        . instrSS
+              [ CALL var $ fromIntegral $ length es
+              , BinIns ADD (Lit (dword * fromIntegral (length es))) $ Reg ESP
+              ]
+        . retCode
 
 transAccessible (ENew (Cls (Ident clsName)) ClsNotArr) = do
     vmts <- gets vmts
@@ -409,21 +548,25 @@ transAccessible (ENew (Cls (Ident clsName)) ClsNotArr) = do
                 , BinIns ADD (Lit $ dword * 2) $ Reg ESP
                 , PUSH $ Reg EAX
                 ]
-transAccessible _ = throwCM "Not an transAccessible or not implemented"
-
-getStrLabel :: String -> CM Integer
-getStrLabel str = do
-    strs <- gets strings
-    case M.lookup str strs of
-        Nothing -> do
-            let i = fromIntegral $ M.size strs
-            modify (\st -> st { strings = M.insert str (StrLabel i str) strs })
-            return i
-        Just (StrLabel i str) -> return i
+transAccessible e =
+    throwCM $ "Not an transAccessible or not implemented " ++ show e
 
 --TODO: return expr w eax i wtedy push tylko jak złożony i potem brać bez popa tylko od razu z eax ogar.
 --TODO: na koniec: spróbować zamienić PUSH rzecz na MOV rzecz do EAX, a w stmtach pop na użycie EAX bezpośrednie
 transExpr :: Expr -> CM InstrS
+
+-- assignables
+transExpr (EVar (Ident var)) = do
+    -- sco <- asks scope
+    -- loc <- findInAnyScope var sco
+    env <- ask
+    case M.lookup var (varMem env) of --TODO:atrybut
+        Nothing       -> throwCM "Impossible transExpr (EVar (Ident var))"
+        Just (loc, _) -> case loc of
+            Attribute l ->
+                return $ instrSS [MOV (Mem $ Param 1) $ Reg EAX, PUSH $ Mem loc] -- Param 1 = self
+            _ -> return $ instrS $ PUSH $ Mem loc
+
 transExpr eattr@(EAttrAcc expr (Ident ident))
     | ident == "length" = do
         type_ <- getExprType expr
@@ -435,14 +578,64 @@ transExpr eattr@(EAttrAcc expr (Ident ident))
     transEAttrAcc :: Expr -> CM InstrS
     transEAttrAcc eattr = do
         accCode <- transAccessible eattr
-        return $ accCode . instrSS [POP $ Reg EAX, PUSH $ AttrAddr 0 EAX]
+        return $ accCode . instrSS [POP $ Reg EAX, PUSH $ Addr 0 EAX]
+
+-- accessibles
+transExpr (EMethCall expr (Ident name) es) = do
+    Cls (Ident cls) <- getExprType expr
+    accCode         <- transExpr expr
+    es'             <- mapM transExpr es
+    let ess = foldr (.) id (reverse es')
+    vmts <- gets vmts
+    --TODO: jak fcja/metoda zwraca void to nie pushujemy EAX!
+    case M.lookup cls vmts of
+        Nothing  -> throwCM "Impossible transAccessible EMethCall"
+        Just vmt -> do
+            (methodOwner, pushReturn) <-
+                case M.lookup name (M.fromList $ vmeths vmt) of
+                    Nothing ->
+                        throwCM "Impossible transAccessible EMethCall name"
+                    Just (Fun t _, _, methodOwner) -> if t == Void
+                        then return (methodOwner, id)
+                        else return (methodOwner, instrS $ PUSH $ Reg EAX)
+
+            return
+                $ ess
+                . accCode
+                . instrSS
+                      [ -- PUSH $ Mem $ Local 1 -- SELF , 
+                        CALL (methodLabel methodOwner name)
+                      $ fromIntegral
+                      $ length es --TODO:FIXME: CALL metoedy z VTABLE A NIE NA PAŁĘ!!! i inicjalizować vtable przy new!!!
+                      , BinIns
+                              ADD
+                              (Lit (dword * (1 + fromIntegral (length es))))
+                          $ Reg ESP
+                      ]
+                . pushReturn
+
+transExpr e@(EApp (Ident var) es) = do
+    es' <- mapM transExpr es
+    let ess = foldr (.) id (reverse es')
+    funRet  <- gets funRet
+    retCode <- case M.lookup var funRet of
+        Nothing -> throwCM "Impossible transAccessible EApp var"
+        Just t ->
+            if t == Void then return id else return $ instrS $ PUSH $ Reg EAX
+    return
+        $ ess
+        . instrSS
+              [ CALL var $ fromIntegral $ length es
+              , BinIns ADD (Lit (dword * fromIntegral (length es))) $ Reg ESP
+              ]
+        . retCode
 
 transExpr (ENew (Cls (Ident clsName)) ClsNotArr) = do
     vmts <- gets vmts
     case M.lookup clsName vmts of
         Nothing  -> throwCM "Impossible ENew Class"
         Just vmt -> do
-            let numMem = fromIntegral $ M.size $ vattrs vmt
+            let numMem = (1 +) $ fromIntegral $ M.size $ vattrs vmt
             return $ instrSS
                 [ PUSH $ Lit dword
                 , PUSH $ Lit numMem
@@ -451,19 +644,18 @@ transExpr (ENew (Cls (Ident clsName)) ClsNotArr) = do
                 , PUSH $ Reg EAX
                 ]
 
+
+
+
+
+
+-----------------------------------------------------------------------------------------------------------------
+
 transExpr (ECastNull _  ) = return $ instrS $ PUSH nullPtr
+
 transExpr (EString   str) = do
     index <- getStrLabel str
     return $ instrS $ PUSH $ StrLit index
-
-transExpr (EVar (Ident var)) = do
-    -- sco <- asks scope
-    -- loc <- findInAnyScope var sco
-    env <- ask
-    case M.lookup var (varMem env) of
-        Nothing       -> throwCM "Impossible transExpr (EVar (Ident var))"
-        Just (loc, _) -> return $ instrS $ PUSH $ Mem loc
-
 transExpr (ELitInt n) = return $ instrS $ PUSH (Lit n)
 transExpr ELitTrue    = return (PUSH trueLit :)
 transExpr ELitFalse   = return (PUSH falseLit :)
@@ -533,15 +725,6 @@ transExpr e@(ERel e1 op e2) = do -- TODO: UNCHECKED
         EQU -> JE -- TODO: STRINGI!
         NE  -> JNE
 
-transExpr (EApp (Ident var) es) = do
-    es' <- mapM transExpr es
-    let ess = foldr (.) id (reverse es')
-    return $ ess . instrSS
-        [ CALL var $ fromIntegral $ length es
-        , BinIns ADD (Lit (dword * fromIntegral (length es))) $ Reg ESP
-        , PUSH $ Reg EAX
-        ]
-
 transExpr (EAnd e1 e2) = do
     falseLabel <- getFreeLabel
     afterLabel <- getFreeLabel
@@ -587,11 +770,22 @@ transExpr (EOr e1 e2) = do
 
 transExpr e = throwCM $ show e
 
+getStrLabel :: String -> CM Integer
+getStrLabel str = do
+    strs <- gets strings
+    case M.lookup str strs of
+        Nothing -> do
+            let i = fromIntegral $ M.size strs
+            modify (\st -> st { strings = M.insert str (StrLabel i str) strs })
+            return i
+        Just (StrLabel i str) -> return i
+
 getExprType :: Expr -> CM Type
 getExprType (EVar (Ident var)) = do
     env <- ask
     case M.lookup var (varMem env) of
-        Nothing     -> throwCM "Impossible getExprType (EVar (Ident var))"
+        Nothing ->
+            throwCM $ "Impossible getExprType (EVar (Ident var)) " ++ var
         Just (_, t) -> return t
 
 getExprType (ELitInt _) = return Int
@@ -608,7 +802,7 @@ getExprType (ENew (Cls (Ident clsName)) ClsNotArr) =
 getExprType (EApp (Ident ident) _) = do
     state <- get
     case M.lookup ident (funRet state) of
-        Nothing -> throwCM "Impossible getExprType (EVar (Ident var))"
+        Nothing -> throwCM "Impossible getExprType (EApp (Ident ident) _))"
         Just t  -> return t
 
 -- getExprType (EPropApp expr ident _    ) = do
@@ -626,7 +820,7 @@ getExprType (EAttrAcc expr (Ident attr)) = do
         Nothing  -> throwCM "Impossible getExprType vmts"
         Just vmt -> case M.lookup attr $ vattrs vmt of
             Nothing     -> throwCM "Impossible getExprType cls"
-            Just (t, _) -> return t
+            Just (_, t) -> return t
 
 -- getExprType (EProp expr ident) = do
 --     t <- getExprType expr
@@ -682,17 +876,19 @@ instance Show Register where
 
 data Memory = Local Integer | Param Integer | Attribute  Integer
 instance Show Memory where
-    show (Param n) = show (dword * (n + 1)) ++ "(" ++ show EBP ++ ")" -- TODO: jeszcze jakoś +/- 4 bo ten adr powr czy co to tam jest czy nie?
-    show (Local n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
+    show (Param     n) = show (dword * (n + 1)) ++ "(" ++ show EBP ++ ")" -- TODO: jeszcze jakoś +/- 4 bo ten adr powr czy co to tam jest czy nie?
+    show (Local     n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
+    show (Attribute n) = show (dword * n) ++ "(" ++ show EAX ++ ")" --TODO: check czy EAX ale no powinien.
     -- show (Stack n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
 
-data Operand = Reg Register | AttrAddr Integer Register | Addr Integer Register | Mem Memory | Lit Integer | StrLit Integer
+data Operand = Reg Register | AttrAddr Integer Register | Addr Integer Register | MethAddr Integer Register  | Mem Memory | Lit Integer | StrLit Integer
 instance Show Operand where
     show (Reg r       ) = show r
     show (Addr     0 r) = "(" ++ show r ++ ")"
     show (Addr     i r) = show (-dword * i) ++ "(" ++ show r ++ ")"
     show (AttrAddr 0 r) = error "Didn't you mean Addr?"
     show (AttrAddr i r) = show (dword * i) ++ "(" ++ show r ++ ")"
+    show (MethAddr i r) = '*' : show (dword * i) ++ "(" ++ show r ++ ")"
     show (Mem    m    ) = show m
     show (Lit    l    ) = '$' : show l
     show (StrLit i    ) = '$' : show (StrLabel i "")
@@ -739,13 +935,14 @@ data Instr = Intro
     | UnIns UnOp Operand
     | BinIns BinOp Operand Operand
     | Lab Label
+    | VMTable [String]
 instance Show Instr where
     show Intro = ".text\n.globl main\n"
     show Prologue =
-        show (PUSH $ Reg EBP) ++ "\n" ++ show (MOV (Reg ESP) $ Reg EBP)
+        show (PUSH $ Reg EBP) ++ "\n\t" ++ show (MOV (Reg ESP) $ Reg EBP)
     show (StackAlloc n) = show $ BinIns SUB (Lit (dword * n)) $ Reg ESP --TODO: align 16
     show Epilogue =
-        show (MOV (Reg EBP) $ Reg ESP) ++ "\n" ++ show (POP $ Reg EBP)
+        show (MOV (Reg EBP) $ Reg ESP) ++ "\n\t" ++ show (POP $ Reg EBP)
     show (CALL l _       ) = "call " ++ l
     show (MOV  o r       ) = "movl " ++ show o ++ ", " ++ show r
     show (LEA  o r       ) = "leal " ++ show o ++ ", " ++ show r
@@ -756,8 +953,9 @@ instance Show Instr where
     show (Jump  unop unin) = show unop ++ " " ++ show unin
     show (BinIns bop bin1 bin2) =
         show bop ++ " " ++ show bin1 ++ ", " ++ show bin2
-    show (Lab l@(StrLabel _i s)) = show l ++ ":\n    .asciz " ++ show s -- ew. .asciz, no idea
-    show (Lab l                ) = show l ++ ":"
+    show (Lab     l@(StrLabel _i s)) = show l ++ ":\n    .asciz " ++ show s -- ew. .asciz, no idea
+    show (Lab     l                ) = show l ++ ":"
+    show (VMTable ms               ) = ".int " ++ intercalate "," ms
 
 dword = 4
 
@@ -768,6 +966,6 @@ instrS :: Instr -> InstrS
 instrS = (:)
 
 x86 :: [Instr] -> CM String
-x86 ins = return $ (unlines . map show) ins
+x86 ins = return $ (unlines . map (\x -> "\t" ++ show x)) ins
 
 -- TODO: stack align 16 jeśli trzeba
