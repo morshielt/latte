@@ -28,7 +28,7 @@ import           Data.Map                      as M
                                                 )
 --TODO: wywołanie error() liczy się jako return w return checkerze!!!
 --DONE: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD nie da się
---TODO: zmienne o nazwie self w metodach!
+--DONE: zmienne o nazwie self w metodach!
 --TODO: porównanie stringów to porównanie referencji czy zawartości?
 type Var = String
 type Offset = Integer
@@ -87,12 +87,15 @@ compile (Program prog) = evalStateT
         flip ($) [] <$> translate vmtsCode prog >>= x86
     predefinedFns :: M.Map Var Type
     predefinedFns = M.fromList
-        [ ("printInt"     , Void)
-        , ("printString"  , Void)
-        , ("error"        , Void)
-        , ("readInt"      , Int)
-        , ("readString"   , Str)
-        , ("concatStrings", Str) --TODO: nazwa lepsza czy coś
+        [ ("printInt"   , Void)
+        , ("printString", Void)
+        , ("error"      , Void)
+        , ("readInt"    , Int)
+        , ("readString" , Str)
+        , ( "concatStrings"
+          , Str
+          ) --TODO: nazwa lepsza czy coś
+        , ("compareStrings", Bool) --TODO: nazwa lepsza czy coś
         ]
 
 createVMTs :: CM InstrS
@@ -446,8 +449,14 @@ transAccessible (EVar (Ident var)) = do
 
 transAccessible (EAttrAcc expr (Ident attr)) = do
     let code i = case expr of
-            EApp{}           -> accessibleCode i
-            EMethCall{}      -> accessibleCode i -- TODO: sprawdzić
+            EApp{}      -> accessibleCode i
+            EMethCall{} -> accessibleCode i
+            -- instrSS
+            --     [ POP $ Reg EAX
+            --     , MOV (Addr 0 EAX) $ Reg EAX
+            --     , LEA (AttrAddr i EAX) $ Reg EDX
+            --     , PUSH $ Reg EDX
+            --     ]
             ENew _ ClsNotArr -> accessibleCode i
             _                -> assignableCode i
     Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
@@ -476,7 +485,7 @@ transAccessible (EMethCall expr (Ident name) es) = do
     --         ENew _ ClsNotArr -> accessibleCode i
     --         _                -> assignableCode i
     Cls (Ident cls) <- getExprType expr
-    accCode         <- transAccessible expr
+    accCode         <- transExpr expr
     es'             <- mapM transExpr es
     let ess = foldr (.) id (reverse es')
     vmts <- gets vmts
@@ -496,7 +505,7 @@ transAccessible (EMethCall expr (Ident name) es) = do
                             return
                                 ( offset
                                 , methodOwner
-                                , instrS $ PUSH $ Addr 0 EAX
+                                , instrS $ PUSH $ Reg EAX
                                 )
 
             return
@@ -539,7 +548,7 @@ transAccessible (EApp (Ident var) es) = do
     retCode <- case M.lookup var funRet of
         Nothing -> throwCM "How would you use void as lvalue?//2"
         Just t ->
-            if t == Void then return id else return $ instrS $ PUSH $ Addr 0 EAX
+            if t == Void then return id else return $ instrS $ PUSH $ Reg EAX
     return
         $ ess
         . instrSS
@@ -716,28 +725,38 @@ transExpr (EMul e1 op e2) = do
             Mod -> Reg EDX
     transBinOp e1 e2 $ binOp [ZIns CDQ, BinIns DIV (Reg ECX) $ Reg EAX] ret
 
-transExpr e@(ERel e1 op e2) = do -- TODO: UNCHECKED
-    code1      <- transExpr e1
-    code2      <- transExpr e2
-    trueLabel  <- getFreeLabel
-    afterLabel <- getFreeLabel
-    let ops =
-            [ POP $ Reg ECX
-            , POP $ Reg EAX
-            , BinIns CMP (Reg ECX) $ Reg EAX
-            , Jump (chooseOp op) $ JmpLabel trueLabel
-            , PUSH falseLit
-            , Jump JMP $ JmpLabel afterLabel
-            , Lab $ JmpLabel trueLabel
-            , PUSH trueLit
-            , Lab $ JmpLabel afterLabel
-            -- , label trueLabel
-            -- , push trueLit
-            -- , label afterLabel
-            ]
-
-    return $ code1 . code2 . instrSS ops
+transExpr e@(ERel e1 op e2)
+    | op `elem` [EQU, NE] = do -- TODO: UNCHECKED
+        t <- getExprType e1
+        case t of
+            Str -> do
+                let cmp     = EApp (Ident "compareStrings") [e1, e2]
+                let trueCmp = if op == NE then Not cmp else cmp
+                transExpr trueCmp
+            _ -> transRelOp e1 op e2
+    | otherwise = transRelOp e1 op e2
   where
+    transRelOp e1 op e2 = do
+        code1      <- transExpr e1
+        code2      <- transExpr e2
+        trueLabel  <- getFreeLabel
+        afterLabel <- getFreeLabel
+        let ops =
+                [ POP $ Reg ECX
+                , POP $ Reg EAX
+                , BinIns CMP (Reg ECX) $ Reg EAX
+                , Jump (chooseOp op) $ JmpLabel trueLabel
+                , PUSH falseLit
+                , Jump JMP $ JmpLabel afterLabel
+                , Lab $ JmpLabel trueLabel
+                , PUSH trueLit
+                , Lab $ JmpLabel afterLabel
+                -- , label trueLabel
+                -- , push trueLit
+                -- , label afterLabel
+                ]
+
+        return $ code1 . code2 . instrSS ops
     chooseOp op = case op of
         LTH -> JL
         LE  -> JLE
@@ -785,9 +804,6 @@ transExpr (EOr e1 e2) = do
                 , Lab $ JmpLabel afterLabel
                 ]
     return $ code1 . shortCirc . code2 . shortCirc . falseCode . outro
--- if w1 goto Ltrueif w2 goto Ltrue
-    -- code for Lfalse or goto Lfalse
-
 
 transExpr e = throwCM $ show e
 
@@ -808,31 +824,6 @@ getExprType (EVar (Ident var)) = do
         Nothing ->
             throwCM $ "Impossible getExprType (EVar (Ident var)) " ++ var
         Just (_, t) -> return t
-
-getExprType (ELitInt _) = return Int
-
-getExprType ELitTrue    = return Bool
-
-getExprType ELitFalse   = return Bool
-
-getExprType (ENew (Cls (Ident clsName)) ClsNotArr) =
-    return $ Cls (Ident clsName)
-
--- getExprType (ENewArr t     _          ) = return (ArrType t)
-
-getExprType (EApp (Ident ident) _) = do
-    state <- get
-    case M.lookup ident (funRet state) of
-        Nothing -> throwCM "Impossible getExprType (EApp (Ident ident) _))"
-        Just t  -> return t
-
--- getExprType (EPropApp expr ident _    ) = do
---     (ClsType t) <- getExprType expr
---     clt         <- getClassType t
---     return $ retType $ case M.lookup ident (fenv clt) of
---         (Just x) -> x
---         Nothing  -> error "Fun in cls fenv lookup!"
-
 getExprType (EAttrAcc expr (Ident attr)) = do
     Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
     accCode         <- transAccessible expr
@@ -843,29 +834,35 @@ getExprType (EAttrAcc expr (Ident attr)) = do
             Nothing     -> throwCM "Impossible getExprType cls"
             Just (_, t) -> return t
 
--- getExprType (EProp expr ident) = do
---     t <- getExprType expr
---     case t of
---         (ClsType name) -> do
---             clt <- getClassType name
---             return $ vtype $ case M.lookup ident (venv clt) of
---                 (Just x) -> x
---                 Nothing  -> error "EProp lookup in getExprType (EProp ...)"
---         (ArrType _) -> return Int  -- The only property is "length", already checked by StaticChecker
--- getExprType (EArrGet e _) = do
---     (ArrType t) <- getExprType e
---     return t
--- getExprType (ENullCast ident) = return $ ClsType ident
-getExprType (EString _)      = return Str
-getExprType (Neg     _)      = return Int
-getExprType (Not     _)      = return Bool
-getExprType EMul{}           = return Int
-getExprType (EAdd e Plus  _) = getExprType e
-getExprType (EAdd e Minus _) = return Int
-getExprType ERel{}           = return Bool
-getExprType EAnd{}           = return Bool
-getExprType EOr{}            = return Bool
-getExprType x                = throwCM $ show x
+getExprType (EMethCall expr (Ident name) es) = do
+    Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
+    accCode         <- transAccessible expr
+    vmts            <- gets vmts
+    case M.lookup cls vmts of
+        Nothing  -> throwCM "Impossible getExprType vmts"
+        Just vmt -> case M.lookup name $ M.fromList $ vmeths vmt of
+            Nothing              -> throwCM "Impossible getExprType cls"
+            Just (Fun t _, _, _) -> return t
+getExprType (EApp (Ident ident) _) = do
+    state <- get
+    case M.lookup ident (funRet state) of
+        Nothing -> throwCM "Impossible getExprType (EApp (Ident ident) _))"
+        Just t  -> return t
+getExprType (ENew cls ClsNotArr) = return cls
+getExprType (ECastNull ident   ) = return $ Cls ident
+getExprType ELitInt{}            = return Int
+getExprType ELitTrue             = return Bool
+getExprType ELitFalse            = return Bool
+getExprType EString{}            = return Str
+getExprType Neg{}                = return Int
+getExprType Not{}                = return Bool
+getExprType EMul{}               = return Int
+getExprType (EAdd e Plus  _)     = getExprType e
+getExprType (EAdd e Minus _)     = return Int
+getExprType ERel{}               = return Bool
+getExprType EAnd{}               = return Bool
+getExprType EOr{}                = return Bool
+getExprType x                    = throwCM $ show x
 -- TODO: jak są stałe, to teoretycznie nie trzebaby ich push/pop tylko wpisać żywcem D: jebać
 binOp ops ret = instrSS $ [POP $ Reg ECX, POP $ Reg EAX] ++ ops ++ [PUSH ret]
 
