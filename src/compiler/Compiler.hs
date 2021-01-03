@@ -657,13 +657,6 @@ transExpr e@(ERel e1 op e2)
             , MOV trueLit (Reg EAX)
             , Lab $ JmpLabel afterLabel
             ]
-    chooseOp op = case op of
-        LTH -> JL
-        LE  -> JLE
-        GTH -> JG
-        GE  -> JGE
-        EQU -> JE
-        NE  -> JNE
 
 transExpr e@(EAnd e1 e2) = do
     falseLabel <- getFreeLabel
@@ -710,28 +703,33 @@ transExpr e = throwCM $ show e
 --     genExp e2
 --     emit $ Jif_icmpgt lThen
 --     emit $ Jgoto lElse
-transCond e@(ERel e1 op e2) lThen lElse = do
-    e1Code <- transExpr e1
-    e2Code <- transExpr e2
-    return $ e1Code . instrS (PUSH $ Reg EAX) . e2Code . instrSS
-        [ MOV (Reg EAX) (Reg ECX)
-        , POP $ Reg EAX
-        , BinIns CMP (Reg ECX) $ Reg EAX
-        , Jump (chooseOp op) $ JmpLabel lThen
-            -- , MOV falseLit (Reg EAX)
-        , Jump JMP $ JmpLabel lElse
-            -- , Lab $ JmpLabel trueLabel
-            -- , MOV trueLit (Reg EAX)
-            -- , Lab $ JmpLabel afterLabel
-        ]
+transCond :: Expr -> Integer -> Integer -> CM InstrS
+transCond e@(ERel e1 op e2) lThen lElse
+    | op `elem` [EQU, NE] = do
+        t <- getExprType e1
+        case t of
+            Str -> do
+                let cmp     = EApp (Ident "compareStrings") [e1, e2]
+                let trueCmp = if op == NE then Not cmp else cmp
+                transCond trueCmp lThen lElse
+            _ -> transCondRel e1 op e2
+    | otherwise = transCondRel e1 op e2
   where
-    chooseOp op = case op of
-        LTH -> JL
-        LE  -> JLE
-        GTH -> JG
-        GE  -> JGE
-        EQU -> JE
-        NE  -> JNE
+    transCondRel e1 op e2 = do
+        e1Code <- transExpr e1
+        e2Code <- transExpr e2
+        return $ e1Code . instrS (PUSH $ Reg EAX) . e2Code . instrSS
+            [ MOV (Reg EAX) (Reg ECX)
+            , POP $ Reg EAX
+            , BinIns CMP (Reg ECX) $ Reg EAX
+            , Jump (chooseOp op) $ JmpLabel lThen
+                -- , MOV falseLit (Reg EAX)
+            , Jump JMP $ JmpLabel lElse
+                -- , Lab $ JmpLabel trueLabel
+                -- , MOV trueLit (Reg EAX)
+                -- , Lab $ JmpLabel afterLabel
+            ]
+
 
 -- transCond (EAnd c1 c2) lTrue lFalse = do
 --     lMid <- getFreeLabel
@@ -824,6 +822,14 @@ getFreeLabel = do
 
 trueLit = Lit 1
 falseLit = Lit 0
+
+chooseOp op = case op of
+    LTH -> JL
+    LE  -> JLE
+    GTH -> JG
+    GE  -> JGE
+    EQU -> JE
+    NE  -> JNE
 
 data Register = EAX | ECX | EDX | EBP | ESP -- deriving Eq
 instance Show Register where
