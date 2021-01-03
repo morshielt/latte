@@ -574,6 +574,7 @@ transAccessible (ENew type_ (ArrSize sizeExpr)) = do
         , BinIns ADD (Lit $ dword * 2) $ Reg ESP
         , POP (Reg EDX)
         , MOV (Reg EDX) (Addr 0 EAX)
+        -- , LEA (Addr 1 EAX) (Reg EAX)
         ]
 
 
@@ -841,6 +842,11 @@ getExprType (EVar (Ident var)) = do
             throwCM $ "Impossible getExprType (EVar (Ident var)) " ++ var
         Just (_, t) -> return t
 
+getExprType (EAttrAcc expr (Ident "length")) = do
+    t <- getExprType expr
+    case t of
+        (Arr t_) -> return t_
+        _        -> snd <$> getVmtAttr expr "length"
 getExprType (EAttrAcc expr  (Ident attr)) = snd <$> getVmtAttr expr attr
 getExprType (EArrAcc  expr1 _           ) = do
     (Arr t) <- getExprType expr1
