@@ -67,6 +67,8 @@ data CState = CState
   , funRet :: VT
   , cDefs :: CD
   , vmts :: M.Map Var VMT
+  , trueLabel ::Maybe Integer
+  , falseLabel ::Maybe Integer
 --   , ins :: InstrS
   } --deriving Show
 
@@ -79,7 +81,7 @@ throwCM = lift . lift . throwE
 
 compile (Program prog) = evalStateT
     (runReaderT (go prog) (CEnv 0 M.empty))
-    (CState 0 0 0 0 0 "" M.empty predefinedFns M.empty M.empty)
+    (CState 0 0 0 0 0 "" M.empty predefinedFns M.empty M.empty Nothing Nothing)
   where
     go prog = do
         saveClassesMembers prog
@@ -296,30 +298,30 @@ transStmt x = case x of
         env  <- ask
         return (env, code)
     Cond e s -> do
-        condCode   <- transExpr e
-        trueCode   <- transAsBStmt s --TODO: czy mam porzucić ten env?
+        trueLabel  <- getFreeLabel
         afterLabel <- getFreeLabel
+
+        condCode   <- transCond e trueLabel afterLabel
+        trueCode   <- transAsBStmt s --TODO: czy mam porzucić ten env?
         let op =
-                instrSS
-                        [ BinIns CMP falseLit $ Reg EAX --TODO: test EAX EAX
-                        , Jump JE $ JmpLabel afterLabel
-                        ]
-                    . trueCode
-                    . instrS (Lab $ JmpLabel afterLabel)
+                -- instrSS
+                --         [ BinIns CMP falseLit $ Reg EAX --TODO: test EAX EAX
+                --         , Jump JE $ JmpLabel afterLabel
+                --         ]
+                 instrS (Lab $ JmpLabel trueLabel) . trueCode . instrS
+                (Lab $ JmpLabel afterLabel)
         env <- ask
         return (env, condCode . op)
     CondElse e s1 s2 -> do
-        condCode   <- transExpr e
-        trueCode   <- transAsBStmt s1
-        falseCode  <- transAsBStmt s2
+        trueLabel  <- getFreeLabel
         falseLabel <- getFreeLabel
         afterLabel <- getFreeLabel
-        let
-            op =
-                instrSS
-                        [ BinIns CMP falseLit $ Reg EAX
-                        , Jump JE $ JmpLabel falseLabel
-                        ]
+
+        condCode   <- transCond e trueLabel falseLabel
+        trueCode   <- transAsBStmt s1
+        falseCode  <- transAsBStmt s2
+        let op =
+                instrS (Lab $ JmpLabel trueLabel)
                     . trueCode
                     . instrS (Jump JMP $ JmpLabel afterLabel)
                     . instrS (Lab $ JmpLabel falseLabel)
@@ -328,11 +330,15 @@ transStmt x = case x of
         env <- ask
         return (env, condCode . op)
     While e s -> do
-        condCode  <- transExpr e
-        loopCode  <- transAsBStmt s
-        condLabel <- getFreeLabel
-        loopLabel <- getFreeLabel
-        env       <- ask
+        -- trueLabel  <- getFreeLabel
+        -- falseLabel <- getFreeLabel
+        afterLabel <- getFreeLabel
+        condLabel  <- getFreeLabel
+        loopLabel  <- getFreeLabel
+
+        condCode   <- transCond e loopLabel afterLabel
+        loopCode   <- transAsBStmt s
+        env        <- ask
         return
             ( env
             , instrS (Jump JMP $ JmpLabel condLabel)
@@ -340,8 +346,9 @@ transStmt x = case x of
             . loopCode
             . instrS (Lab $ JmpLabel condLabel)
             . condCode
-            . instrSS
-                  [BinIns CMP trueLit $ Reg EAX, Jump JE $ JmpLabel loopLabel]
+            . instrS (Lab $ JmpLabel afterLabel)
+            -- . instrSS
+            --       [BinIns CMP trueLit $ Reg EAX, Jump JE $ JmpLabel loopLabel]
             )
     Decl t ds -> do
         env <- ask
@@ -466,8 +473,7 @@ transAccessible (EAttrAcc expr (Ident attr)) = do
         EMethCall{}      -> accessibleCode i
         ENew _ ClsNotArr -> accessibleCode i
         _                -> assignableCode i
-    accessibleCode i =
-        instrSS [ LEA (AttrAddr i EAX) $ Reg EAX]
+    accessibleCode i = instrSS [LEA (AttrAddr i EAX) $ Reg EAX]
     assignableCode i = instrSS
         [ --POP $ Reg EAX , 
           MOV (Addr 0 EAX) $ Reg EDX
@@ -659,40 +665,104 @@ transExpr e@(ERel e1 op e2)
         EQU -> JE
         NE  -> JNE
 
-transExpr (EAnd e1 e2) = do
+transExpr e@(EAnd e1 e2) = do
     falseLabel <- getFreeLabel
+    trueLabel  <- getFreeLabel
     afterLabel <- getFreeLabel
-    code1      <- transExpr e1
-    let shortCirc = instrSS
-            [BinIns CMP falseLit $ Reg EAX, Jump JE $ JmpLabel falseLabel] -- TODO: TEST?
-    code2 <- transExpr e2
-    let trueCode =
-            instrSS [MOV trueLit (Reg EAX), Jump JMP $ JmpLabel afterLabel]
+    code       <- transCond e trueLabel falseLabel
+
+    let trueCode = instrSS
+            [ Lab $ JmpLabel trueLabel
+            , MOV trueLit (Reg EAX)
+            , Jump JMP $ JmpLabel afterLabel
+            ]
     let outro = instrSS
             [ Lab $ JmpLabel falseLabel
             , MOV falseLit (Reg EAX)
             , Lab $ JmpLabel afterLabel
             ]
-    return $ code1 . shortCirc . code2 . shortCirc . trueCode . outro
+    return $ code . trueCode . outro
 
-transExpr (EOr e1 e2) = do
+transExpr e@(EOr e1 e2) = do
+    falseLabel <- getFreeLabel
     trueLabel  <- getFreeLabel
     afterLabel <- getFreeLabel
+    code       <- transCond e trueLabel falseLabel
 
-    code1      <- transExpr e1
-    let shortCirc =
-            instrSS [BinIns CMP trueLit $ Reg EAX, Jump JE $ JmpLabel trueLabel]
-    code2 <- transExpr e2
-    let falseCode =
-            instrSS [MOV falseLit (Reg EAX), Jump JMP $ JmpLabel afterLabel]
+    let falseCode = instrSS
+            [ Lab $ JmpLabel falseLabel
+            , MOV falseLit (Reg EAX)
+            , Jump JMP $ JmpLabel afterLabel
+            ]
     let outro = instrSS
             [ Lab $ JmpLabel trueLabel
             , MOV trueLit (Reg EAX)
             , Lab $ JmpLabel afterLabel
             ]
-    return $ code1 . shortCirc . code2 . shortCirc . falseCode . outro
+    return $ code . falseCode . outro
+
 
 transExpr e = throwCM $ show e
+
+
+-- transCond (CGt e1 e2) lThen lElse = do
+--     genExp e1
+--     genExp e2
+--     emit $ Jif_icmpgt lThen
+--     emit $ Jgoto lElse
+transCond e@(ERel e1 op e2) lThen lElse = do
+    e1Code <- transExpr e1
+    e2Code <- transExpr e2
+    return $ e1Code . instrS (PUSH $ Reg EAX) . e2Code . instrSS
+        [ MOV (Reg EAX) (Reg ECX)
+        , POP $ Reg EAX
+        , BinIns CMP (Reg ECX) $ Reg EAX
+        , Jump (chooseOp op) $ JmpLabel lThen
+            -- , MOV falseLit (Reg EAX)
+        , Jump JMP $ JmpLabel lElse
+            -- , Lab $ JmpLabel trueLabel
+            -- , MOV trueLit (Reg EAX)
+            -- , Lab $ JmpLabel afterLabel
+        ]
+  where
+    chooseOp op = case op of
+        LTH -> JL
+        LE  -> JLE
+        GTH -> JG
+        GE  -> JGE
+        EQU -> JE
+        NE  -> JNE
+
+-- transCond (EAnd c1 c2) lTrue lFalse = do
+--     lMid <- getFreeLabel
+--     transCond c1 lMid lFalse
+--     emit $ placeLabel lMid
+--     transCond c2 lTrue lFalse
+transCond (EAnd c1 c2) lTrue lFalse = do
+    lMid  <- getFreeLabel
+    code1 <- transCond c1 lMid lFalse
+    -- emit $ placeLabel lMid
+    code2 <- transCond c2 lTrue lFalse
+    return $ code1 . instrS (Lab $ JmpLabel lMid) . code2
+
+transCond ELitTrue lTrue lFalse = return $ instrS (Jump JMP $ JmpLabel lTrue)
+transCond ELitFalse lTrue lFalse = return $ instrS (Jump JMP $ JmpLabel lFalse)
+
+-- transCond (COr c1 c2) lTrue lFalse = do
+--     lMid <- getFreeLabel
+--     transCond c1 lTrue lMid
+--     emit $ placeLabel lMid
+--     transCond c2 lTrue lFalse
+transCond (EOr c1 c2) lTrue lFalse = do
+    lMid  <- getFreeLabel
+    code1 <- transCond c1 lTrue lMid
+    code2 <- transCond c2 lTrue lFalse
+    return $ code1 . instrS (Lab $ JmpLabel lMid) . code2
+
+-- transCond (CNot c) lTrue lFalse = genCond c lFalse lTrue
+transCond (Not c) lTrue lFalse = transCond c lFalse lTrue
+
+transCond e       lTrue lFalse = transCond (ERel e EQU ELitTrue) lTrue lFalse
 
 binOp ops ret = instrSS ((POP $ Reg ECX) : ops) . ret
 
@@ -863,7 +933,10 @@ instrSS = (++)
 instrS :: Instr -> InstrS
 instrS = (:)
 
+indent :: Instr -> String
+indent (Lab _) = ""
+indent _       = "\t"
 x86 :: [Instr] -> CM String
-x86 ins = return $ (unlines . map (\x -> "\t" ++ show x)) ins
+x86 ins = return $ (unlines . map (\x -> indent x ++ show x)) ins
 
 -- DONE: stack align 16 jeśli trzeba [NIE TRZEBA]
