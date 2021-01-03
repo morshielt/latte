@@ -29,7 +29,7 @@ import           Data.Map                      as M
 --TODO: wywołanie error() liczy się jako return w return checkerze!!!
 --DONE: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD nie da się
 --DONE: zmienne o nazwie self w metodach!
---TODO: porównanie stringów to porównanie referencji czy zawartości?
+--DONE: porównanie stringów to porównanie referencji czy zawartości?
 type Var = String
 type Offset = Integer
 -- type Label = Integer
@@ -219,13 +219,12 @@ transTopDef :: TopDef -> CM InstrS
 transTopDef x = case x of
     FnDef ret (Ident name) args b -> do
         modify (\st -> st { locals = 0, retLabel = "ret_" ++ name })
-        --TODO: dodać se argumenty do varMem XD
         (_, code) <- local
             (\env -> env
                 { varMem = M.fromList $ zipWith
                                (\(Arg t (Ident var)) i -> (var, (Param i, t)))
                                args
-                               [1 ..] -- TODO: od 1 czy od 0?}) 
+                               [1 ..]
                 }
             )
             (transStmt (BStmt b))
@@ -263,7 +262,7 @@ transMethods cls (Meth ret (Ident name) args b) = do
                                          (var, (Param i, t))
                                      )
                                      args
-                                     [2 ..] -- TODO: od 1 czy od 0?}) 
+                                     [2 ..]
                     }
                 )
                 (transStmt (BStmt b))
@@ -302,13 +301,8 @@ transStmt x = case x of
         afterLabel <- getFreeLabel
 
         condCode   <- transCond e trueLabel afterLabel
-        trueCode   <- transAsBStmt s --TODO: czy mam porzucić ten env?
-        let op =
-                -- instrSS
-                --         [ BinIns CMP falseLit $ Reg EAX --TODO: test EAX EAX
-                --         , Jump JE $ JmpLabel afterLabel
-                --         ]
-                 instrS (Lab $ JmpLabel trueLabel) . trueCode . instrS
+        trueCode   <- transAsBStmt s
+        let op = instrS (Lab $ JmpLabel trueLabel) . trueCode . instrS
                 (Lab $ JmpLabel afterLabel)
         env <- ask
         return (env, condCode . op)
@@ -330,8 +324,6 @@ transStmt x = case x of
         env <- ask
         return (env, condCode . op)
     While e s -> do
-        -- trueLabel  <- getFreeLabel
-        -- falseLabel <- getFreeLabel
         afterLabel <- getFreeLabel
         condLabel  <- getFreeLabel
         loopLabel  <- getFreeLabel
@@ -374,8 +366,32 @@ transStmt x = case x of
     BStmt (Block ss) -> do
         env <- ask
         local (\env -> env { scope = scope env + 1 }) $ transStmts ss
-    x -> throwCM $ show x ++ "\nstmt not implemented yet"
-
+    For t ident arr stmt ->
+    -- int i = 0 
+-- while i < a.length
+    -- ident = a[i]
+    -- code
+            -- i++
+        let iter = Ident "xxx"
+        in
+            let
+                toWhile = BStmt $ Block
+                    [ Decl Int [Init iter (ELitInt 0)]
+                    , While
+                        (ERel (EVar iter) LTH (EAttrAcc arr (Ident "length")))
+                        ( BStmt
+                        $ Block
+                              [ Decl
+                                  t
+                                  [Init ident (EArrAcc arr (EVar iter))]
+                              , stmt
+                              , Incr (EVar iter)
+                              ]
+                        )
+                    ]
+            in  do
+                    liftIO $ print toWhile
+                    transStmt toWhile
   where
     transStmts :: [Stmt] -> CM (CEnv, InstrS)
     transStmts ss = do
@@ -408,7 +424,7 @@ transStmt x = case x of
         (var, code) <- case d of
             (NoInit (Ident var)) -> do
                 def <- defaultValue t
-                return (var, instrS $ MOV def (Mem loc)) -- TODO: inicjalizacja domyślna!
+                return (var, instrS $ MOV def (Mem loc))
             (Init (Ident var) e) -> do
                 initCode <- transExpr e
                 return (var, initCode . instrSS [MOV (Reg EAX) (Mem loc)])
@@ -425,7 +441,7 @@ nullPtr = Lit 0
 
 getVmts :: Expr -> CM VMT
 getVmts expr = do
-    Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
+    Cls (Ident cls) <- getExprType expr
     vmts            <- gets vmts
     case M.lookup cls vmts of
         Nothing  -> throwCM "Impossible transEAttrAcc vmts"
@@ -469,15 +485,40 @@ transAccessible (EAttrAcc expr (Ident attr)) = do
     return $ accCode . code i
   where
     code i = case expr of
-        EApp{}           -> accessibleCode i
-        EMethCall{}      -> accessibleCode i
-        ENew _ ClsNotArr -> accessibleCode i
-        _                -> assignableCode i
+        EApp{}      -> accessibleCode i
+        EMethCall{} -> accessibleCode i
+        ENew{}      -> accessibleCode i
+        _           -> assignableCode i
     accessibleCode i = instrSS [LEA (AttrAddr i EAX) $ Reg EAX]
     assignableCode i = instrSS
         [ --POP $ Reg EAX , 
           MOV (Addr 0 EAX) $ Reg EDX
         , LEA (AttrAddr i EDX) $ Reg EAX
+        -- , PUSH $ Reg EAX
+        ]
+
+transAccessible (EArrAcc accExpr indexExpr) = do
+    indexCode <- transExpr indexExpr
+    accCode   <- transAccessible accExpr
+    return $ indexCode . instrS (PUSH (Reg EAX)) . accCode . code
+  where
+    code = case accExpr of
+        EApp{}      -> accessibleCode
+        EMethCall{} -> accessibleCode
+        ENew{}      -> accessibleCode
+        _           -> assignableCode
+    accessibleCode = instrSS
+        [ POP (Reg EDX)
+        , UnIns INC (Reg EDX)
+        , LEA (ArrElemAddr EAX EDX dword) $ Reg EAX
+        ]
+    assignableCode = instrSS
+        [ --POP $ Reg EAX , 
+        --   MOV (Reg EAX) (Reg EDX),
+          POP (Reg EDX)
+        , UnIns INC (Reg EDX)
+        , MOV (Addr 0 EAX) $ Reg EAX
+        , LEA (ArrElemAddr EAX EDX dword) $ Reg EAX
         -- , PUSH $ Reg EAX
         ]
 
@@ -519,8 +560,22 @@ transAccessible (ENew (Cls (Ident clsName)) ClsNotArr) = do
                 , CALL "calloc" 2
                 , BinIns ADD (Lit $ dword * 2) $ Reg ESP
                 , MOV (VTMLit $ vmtLabel clsName) $ Addr 0 EAX
-                -- , PUSH $ Reg EAX
                 ]
+
+transAccessible (ENew type_ (ArrSize sizeExpr)) = do
+    sizeCode <- transExpr sizeExpr
+    return $ sizeCode . instrSS
+        [ PUSH $ Reg EAX
+        -- , MOV (Reg EAX) (Reg EBX)
+        , UnIns INC (Reg EAX)
+        , PUSH $ Lit dword
+        , PUSH $ Reg EAX
+        , CALL "calloc" 2
+        , BinIns ADD (Lit $ dword * 2) $ Reg ESP
+        , POP (Reg EDX)
+        , MOV (Reg EDX) (Addr 0 EAX)
+        ]
+
 
 transAccessible e =
     throwCM $ "Not an transAccessible or not implemented " ++ show e
@@ -548,7 +603,7 @@ transExpr eattr@(EAttrAcc expr (Ident ident))
     | ident == "length" = do
         type_ <- getExprType expr
         case type_ of
-            (Arr _) -> throwCM ".length arr unimplemented"
+            (Arr _) -> transExpr (EArrAcc expr (ELitInt (-1)))
             _       -> transEAttrAcc eattr
     | otherwise = transEAttrAcc eattr
   where
@@ -557,18 +612,24 @@ transExpr eattr@(EAttrAcc expr (Ident ident))
         accCode <- transAccessible eattr
         return $ accCode . instrSS [MOV (Addr 0 EAX) (Reg EAX)]
 
+transExpr earracc@(EArrAcc expr1 expr2) = do
+    accCode <- transAccessible earracc
+    return $ accCode . instrSS [MOV (Addr 0 EAX) (Reg EAX)]
+
 -- -- accessibles
-transExpr e@(EMethCall expr (Ident name) es        ) = transAccessible e
+transExpr e@(EMethCall expr (Ident name) es) = transAccessible e
 
-transExpr e@(EApp (Ident var            ) es       ) = transAccessible e
+transExpr e@(EApp (Ident var) es)            = transAccessible e
 
-transExpr e@(ENew (Cls   (Ident clsName)) ClsNotArr) = transAccessible e
+transExpr e@(ENew (Cls (Ident clsName)) ClsNotArr) = transAccessible e
+
+transExpr e@(ENew type_ (ArrSize sizeExpr))  = transAccessible e
 
 -- -----------------------------------------------------------------------------------------------------------------
 
 transExpr (ECastNull _) = return $ instrS $ MOV nullPtr (Reg EAX) --TODO: unchecked EAXing
 
-transExpr (  EString   str                         ) = do --TODO: unchecked EAXing
+transExpr (  EString   str                 ) = do --TODO: unchecked EAXing
     index <- getStrLabel str
     return $ instrS $ MOV (StrLit index) (Reg EAX)
   where
@@ -695,7 +756,7 @@ transExpr e@(EOr e1 e2) = do
     return $ code . falseCode . outro
 
 
-transExpr e = throwCM $ show e
+transExpr e = throwCM $ "transExpr e" ++ show e
 
 
 -- transCond (CGt e1 e2) lThen lElse = do
@@ -780,8 +841,10 @@ getExprType (EVar (Ident var)) = do
             throwCM $ "Impossible getExprType (EVar (Ident var)) " ++ var
         Just (_, t) -> return t
 
-getExprType (EAttrAcc expr (Ident attr)    ) = snd <$> getVmtAttr expr attr
-
+getExprType (EAttrAcc expr  (Ident attr)) = snd <$> getVmtAttr expr attr
+getExprType (EArrAcc  expr1 _           ) = do
+    (Arr t) <- getExprType expr1
+    return t
 getExprType (EMethCall expr (Ident name) es) = do
     Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
     accCode         <- transAccessible expr
@@ -796,22 +859,21 @@ getExprType (EApp (Ident ident) _) = do
     case M.lookup ident (funRet state) of
         Nothing -> throwCM "Impossible getExprType (EApp (Ident ident) _))"
         Just t  -> return t
-getExprType (ENew cls ClsNotArr) = return cls
-getExprType (ECastNull ident   ) = return $ Cls ident
-getExprType ELitInt{}            = return Int
-getExprType ELitTrue             = return Bool
-getExprType ELitFalse            = return Bool
-getExprType EString{}            = return Str
-getExprType Neg{}                = return Int
-getExprType Not{}                = return Bool
-getExprType EMul{}               = return Int
-getExprType (EAdd e Plus  _)     = getExprType e
-getExprType (EAdd e Minus _)     = return Int
-getExprType ERel{}               = return Bool
-getExprType EAnd{}               = return Bool
-getExprType EOr{}                = return Bool
-getExprType x                    = throwCM $ show x
--- TODO: jak są stałe, to teoretycznie nie trzebaby ich push/pop tylko wpisać żywcem D: jebać
+getExprType (ENew cls ClsNotArr)     = return cls
+getExprType (ECastNull ident   )     = return $ Cls ident
+getExprType ELitInt{}                = return Int
+getExprType ELitTrue                 = return Bool
+getExprType ELitFalse                = return Bool
+getExprType EString{}                = return Str
+getExprType Neg{}                    = return Int
+getExprType Not{}                    = return Bool
+getExprType EMul{}                   = return Int
+getExprType (EAdd e Plus  _)         = getExprType e
+getExprType (EAdd e Minus _)         = return Int
+getExprType ERel{}                   = return Bool
+getExprType EAnd{}                   = return Bool
+getExprType EOr{}                    = return Bool
+getExprType (ENew type_ (ArrSize _)) = return $ Arr type_
 
 getFreeLabel :: CM Integer
 getFreeLabel = do
@@ -831,12 +893,12 @@ chooseOp op = case op of
     EQU -> JE
     NE  -> JNE
 
-data Register = EAX | ECX | EDX | EBP | ESP -- deriving Eq
+data Register = EAX | ECX | EBX | EDX | EBP | ESP -- deriving Eq
 instance Show Register where
     show EBP = "%ebp"
     show ESP = "%esp"
     show EAX = "%eax"
---   show EBX = "%ebx"
+    show EBX = "%ebx"
     show EDX = "%edx"
     show ECX = "%ecx"
 --   show EDI = "%edi"
@@ -844,16 +906,26 @@ instance Show Register where
 
 data Memory = Local Integer | Param Integer | Attribute  Integer
 instance Show Memory where
-    show (Param     n) = show (dword * (n + 1)) ++ "(" ++ show EBP ++ ")" -- TODO: jeszcze jakoś +/- 4 bo ten adr powr czy co to tam jest czy nie?
+    show (Param     n) = show (dword * (n + 1)) ++ "(" ++ show EBP ++ ")"
     show (Local     n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
     show (Attribute n) = show (dword * n) ++ "(" ++ show EAX ++ ")" --TODO: check czy EAX ale no powinien.
     -- show (Stack n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
 
-data Operand = Reg Register | AttrAddr Integer Register | Addr Integer Register | MethAddr Integer Register  | Mem Memory | Lit Integer | StrLit Integer | VTMLit String
+data Operand = Reg Register
+    | AttrAddr Integer Register
+    | Addr Integer Register
+    | ArrElemAddr Register Register Integer
+    | MethAddr Integer Register
+    | Mem Memory
+    | Lit Integer
+    | StrLit Integer
+    | VTMLit String
 instance Show Operand where
-    show (Reg r       ) = show r
-    show (Addr     0 r) = "(" ++ show r ++ ")"
-    show (Addr     i r) = show (-dword * i) ++ "(" ++ show r ++ ")"
+    show (Reg r   ) = show r
+    show (Addr 0 r) = "(" ++ show r ++ ")"
+    show (Addr i r) = show (-dword * i) ++ "(" ++ show r ++ ")"
+    show (ArrElemAddr r1 r2 i) =
+        "(" ++ show r1 ++ "," ++ show r2 ++ "," ++ show i ++ ")"
     show (AttrAddr 0 r) = error "Didn't you mean Addr?"
     show (AttrAddr i r) = show (dword * i) ++ "(" ++ show r ++ ")"
     show (MethAddr 0 r) = '*' : "(" ++ show r ++ ")"
