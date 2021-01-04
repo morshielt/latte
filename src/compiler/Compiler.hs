@@ -26,10 +26,15 @@ import           Data.Map                      as M
                                                 , toList
                                                 , union
                                                 )
---TODO: wywołanie error() liczy się jako return w return checkerze!!!
+--DONE: wywołanie error() liczy się jako return w return checkerze!!!
 --DONE: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD nie da się
 --DONE: zmienne o nazwie self w metodach!
 --DONE: porównanie stringów to porównanie referencji czy zawartości?
+--DONE:[ale jakoś szału nie ma xD] poprawić transCond domyślny na ręcznie napisany
+--DONE: co jak nazwiemy zmienną 'null'? nic, whatever, czemu nie XD
+-- DONE: czy (A)null == (B)null? nie powinno, typecheck poiwnien wywalać
+--DONE: przetestować tablice tablic/obiektów/stringów
+--DONE: strcmp stringów pełen
 type Var = String
 type Offset = Integer
 -- type Label = Integer
@@ -94,10 +99,8 @@ compile (Program prog) = evalStateT
         , ("error"      , Void)
         , ("readInt"    , Int)
         , ("readString" , Str)
-        , ( "concatStrings"
-          , Str
-          ) --TODO: nazwa lepsza czy coś
-        , ("compareStrings", Bool) --TODO: nazwa lepsza czy coś
+        , ("_____concatStrings", Str)
+        , ("_____compareStrings", Bool)
         ]
 
 createVMTs :: CM InstrS
@@ -196,20 +199,23 @@ saveClassesMembers = mapM_ saveClassMembers
         -> ClMember
         -> CM ([(Var, Type)], [(Var, Type)])
     saveClassMember (attrs, meths) member = case member of
-        Attr type_ (Ident ident) -> return (attrs ++ [(ident, type_)], meths) -- TODO: spr. czy dodawanie przez : działa tak samo (bo by lepsze było)
+        Attr type_ (Ident ident)      -> return ((ident, type_) : attrs, meths) -- DONE: [niby działa] spr. czy dodawanie przez : działa tak samo (bo by lepsze było)
         Meth ret (Ident ident) args _ -> do
             let type_ = Fun ret (map (\(Arg t _) -> t) args)
-            return (attrs, meths ++ [(ident, type_)])
+            return (attrs, (ident, type_) : meths)
 
 
 translate :: InstrS -> [TopDef] -> CM InstrS
 translate vmtsCode tds = do
-    code <- foldM go vmtsCode tds
+    code <- foldM go id tds
     strs <- gets strings
     let strLabels = map Lab $ M.elems strs
-    -- TODO: stringi w sekcji .data, sekcja text po nich!
-    return $ instrS Intro . instrSS strLabels . code
-
+    return
+        $ instrSS [Intro, DataSection]
+        . instrSS strLabels
+        . vmtsCode
+        . instrS TextSection
+        . code
   where
     go accCode stmt = do
         code <- transTopDef stmt
@@ -347,7 +353,7 @@ transStmt x = case x of
         foldM (goDecl t) (env, id) ds
 
     Ass ass e -> do
-        accCode  <- transAccessible ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
+        accCode  <- transAccessible ass
         exprCode <- transExpr e
         env      <- ask
         return
@@ -356,11 +362,11 @@ transStmt x = case x of
                 [POP $ Reg EDX, MOV (Reg EAX) $ Addr 0 EDX]
             )
     Incr ass -> do
-        accCode <- transAccessible ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
+        accCode <- transAccessible ass
         env     <- ask
         return (env, accCode . instrSS [UnIns INC $ Addr 0 EAX])
     Decr ass -> do
-        accCode <- transAccessible ass -- TODO: tablice/pole ogarnąć instrukcje kolejność no
+        accCode <- transAccessible ass
         env     <- ask
         return (env, accCode . instrSS [UnIns DEC $ Addr 0 EAX])
     BStmt (Block ss) -> do
@@ -403,7 +409,7 @@ transStmt x = case x of
         go (env', accCode) s = do
             (env'', code) <- local (const env') $ transStmt s
             return (env'', accCode . code)
-    transAsBStmt :: Stmt -> CM InstrS --TODO: czy mam tu porzucać env? 
+    transAsBStmt :: Stmt -> CM InstrS
     transAsBStmt s@(BStmt _) = do
         (_, code) <- transStmt s
         return code
@@ -472,7 +478,7 @@ transAccessible :: Expr -> CM InstrS
 -- assignable
 transAccessible (EVar (Ident var)) = transEVar var attrCode locCode
   where
-    attrCode loc = -- TODO: untested EAXing
+    attrCode loc =
         [ MOV (Mem $ Param 1) $ Reg EAX
         , LEA (Mem loc) $ Reg EDX
         , MOV (Reg EDX) (Reg EAX)
@@ -577,10 +583,6 @@ transAccessible (ENew type_ (ArrSize sizeExpr)) = do
         -- , LEA (Addr 1 EAX) (Reg EAX)
         ]
 
-
-transAccessible e =
-    throwCM $ "Not an transAccessible or not implemented " ++ show e
-
 transEVar :: Var -> (Memory -> [Instr]) -> (Memory -> [Instr]) -> CM InstrS
 transEVar var attrCode locCode = do
     env <- ask
@@ -590,13 +592,12 @@ transEVar var attrCode locCode = do
             Attribute _ -> return $ instrSS $ attrCode loc
             _           -> return $ instrSS $ locCode loc
 
---TODO: return expr w eax i wtedy push tylko jak złożony i potem brać bez popa tylko od razu z eax ogar.
---TODO: na koniec: spróbować zamienić PUSH rzecz na MOV rzecz do EAX, a w stmtach pop na użycie EAX bezpośrednie
+--DONE: return expr w eax i wtedy push tylko jak złożony i potem brać bez popa tylko od razu z eax ogar.
+--DONE: na koniec: spróbować zamienić PUSH rzecz na MOV rzecz do EAX, a w stmtach pop na użycie EAX bezpośrednie
 transExpr :: Expr -> CM InstrS
 -- assignables
 transExpr (EVar (Ident var)) = transEVar var attrCode locCode
   where
-      --TODO: może nie pójść EAXing! może LEA trzeba
     attrCode loc = [MOV (Mem $ Param 1) $ Reg EAX, MOV (Mem loc) (Reg EAX)]
     locCode loc = [MOV (Mem loc) (Reg EAX)]
 
@@ -623,14 +624,13 @@ transExpr e@(EMethCall expr (Ident name) es) = transAccessible e
 transExpr e@(EApp (Ident var) es)            = transAccessible e
 
 transExpr e@(ENew (Cls (Ident clsName)) ClsNotArr) = transAccessible e
-
 transExpr e@(ENew type_ (ArrSize sizeExpr))  = transAccessible e
 
 -- -----------------------------------------------------------------------------------------------------------------
 
-transExpr (ECastNull _) = return $ instrS $ MOV nullPtr (Reg EAX) --TODO: unchecked EAXing
+transExpr (ECastNull _) = return $ instrS $ MOV nullPtr (Reg EAX)
 
-transExpr (  EString   str                 ) = do --TODO: unchecked EAXing
+transExpr (  EString   str                 ) = do
     index <- getStrLabel str
     return $ instrS $ MOV (StrLit index) (Reg EAX)
   where
@@ -665,7 +665,7 @@ transExpr (Not e) = do
 transExpr (EAdd e1 op e2) = do
     t <- getExprType e1
     case t of
-        Str -> transExpr (EApp (Ident "concatStrings") [e1, e2])
+        Str -> transExpr (EApp (Ident "_____concatStrings") [e1, e2])
         _   -> do
             let op' = case op of
                     Plus  -> ADD
@@ -692,27 +692,32 @@ transExpr (EMul e1 op e2) = do
               ]
         . ret
 
-transExpr e@(ERel e1 op e2)
-    | op `elem` [EQU, NE] = do
-        t <- getExprType e1
-        case t of
-            Str -> do
-                let cmp     = EApp (Ident "compareStrings") [e1, e2]
-                let trueCmp = if op == NE then Not cmp else cmp
-                transExpr trueCmp
-            _ -> transRelOp e1 op e2
-    | otherwise = transRelOp e1 op e2
+transExpr e@(ERel e1 op e2) = do
+    t <- getExprType e1
+    case t of
+        Str -> do
+            let cmp = EApp (Ident "_____compareStrings") [e1, e2]
+            cmpCall    <- transExpr cmp
+            trueLabel  <- getFreeLabel
+            afterLabel <- getFreeLabel
+            return $ cmpCall . instrSS
+                [ BinIns CMP (Lit 0) (Reg EAX)
+                , Jump (chooseOp op) $ JmpLabel trueLabel
+                , MOV falseLit (Reg EAX)
+                , Jump JMP $ JmpLabel afterLabel
+                , Lab $ JmpLabel trueLabel
+                , MOV trueLit (Reg EAX)
+                , Lab $ JmpLabel afterLabel
+                ]
+        _ -> transRelOp e1 op e2
   where
     transRelOp e1 op e2 = do
-        code1      <- transExpr e1
-        code2      <- transExpr e2
+        falseLabel <- getFreeLabel
         trueLabel  <- getFreeLabel
         afterLabel <- getFreeLabel
-        return $ code1 . instrS (PUSH $ Reg EAX) . code2 . instrSS
-            [ MOV (Reg EAX) (Reg ECX)
-            , POP $ Reg EAX
-            , BinIns CMP (Reg ECX) $ Reg EAX
-            , Jump (chooseOp op) $ JmpLabel trueLabel
+        code       <- transCond e trueLabel falseLabel
+        return $ code . instrSS
+            [ Lab $ JmpLabel falseLabel
             , MOV falseLit (Reg EAX)
             , Jump JMP $ JmpLabel afterLabel
             , Lab $ JmpLabel trueLabel
@@ -725,40 +730,28 @@ transExpr e@(EAnd e1 e2) = do
     trueLabel  <- getFreeLabel
     afterLabel <- getFreeLabel
     code       <- transCond e trueLabel falseLabel
-
-    let trueCode = instrSS
-            [ Lab $ JmpLabel trueLabel
-            , MOV trueLit (Reg EAX)
-            , Jump JMP $ JmpLabel afterLabel
-            ]
-    let outro = instrSS
-            [ Lab $ JmpLabel falseLabel
-            , MOV falseLit (Reg EAX)
-            , Lab $ JmpLabel afterLabel
-            ]
-    return $ code . trueCode . outro
+    return $ code . instrSS
+        [ Lab $ JmpLabel trueLabel
+        , MOV trueLit (Reg EAX)
+        , Jump JMP $ JmpLabel afterLabel
+        , Lab $ JmpLabel falseLabel
+        , MOV falseLit (Reg EAX)
+        , Lab $ JmpLabel afterLabel
+        ]
 
 transExpr e@(EOr e1 e2) = do
     falseLabel <- getFreeLabel
     trueLabel  <- getFreeLabel
     afterLabel <- getFreeLabel
     code       <- transCond e trueLabel falseLabel
-
-    let falseCode = instrSS
-            [ Lab $ JmpLabel falseLabel
-            , MOV falseLit (Reg EAX)
-            , Jump JMP $ JmpLabel afterLabel
-            ]
-    let outro = instrSS
-            [ Lab $ JmpLabel trueLabel
-            , MOV trueLit (Reg EAX)
-            , Lab $ JmpLabel afterLabel
-            ]
-    return $ code . falseCode . outro
-
-
-transExpr e = throwCM $ "transExpr e" ++ show e
-
+    return $ code . instrSS
+        [ Lab $ JmpLabel falseLabel
+        , MOV falseLit (Reg EAX)
+        , Jump JMP $ JmpLabel afterLabel
+        , Lab $ JmpLabel trueLabel
+        , MOV trueLit (Reg EAX)
+        , Lab $ JmpLabel afterLabel
+        ]
 
 -- transCond (CGt e1 e2) lThen lElse = do
 --     genExp e1
@@ -766,16 +759,18 @@ transExpr e = throwCM $ "transExpr e" ++ show e
 --     emit $ Jif_icmpgt lThen
 --     emit $ Jgoto lElse
 transCond :: Expr -> Integer -> Integer -> CM InstrS
-transCond e@(ERel e1 op e2) lThen lElse
-    | op `elem` [EQU, NE] = do
-        t <- getExprType e1
-        case t of
-            Str -> do
-                let cmp     = EApp (Ident "compareStrings") [e1, e2]
-                let trueCmp = if op == NE then Not cmp else cmp
-                transCond trueCmp lThen lElse
-            _ -> transCondRel e1 op e2
-    | otherwise = transCondRel e1 op e2
+transCond e@(ERel e1 op e2) lThen lElse = do
+    t <- getExprType e1
+    case t of
+        Str -> do
+            let cmp = EApp (Ident "_____compareStrings") [e1, e2]
+            cmpCall <- transExpr cmp
+            return $ cmpCall . instrSS
+                [ BinIns CMP (Lit 0) (Reg EAX)
+                , Jump (chooseOp op) $ JmpLabel lThen
+                , Jump JMP $ JmpLabel lElse
+                ]
+        _ -> transCondRel e1 op e2
   where
     transCondRel e1 op e2 = do
         e1Code <- transExpr e1
@@ -822,7 +817,13 @@ transCond (EOr c1 c2) lTrue lFalse = do
 -- transCond (CNot c) lTrue lFalse = genCond c lFalse lTrue
 transCond (Not c) lTrue lFalse = transCond c lFalse lTrue
 
-transCond e       lTrue lFalse = transCond (ERel e EQU ELitTrue) lTrue lFalse
+transCond e       lTrue lFalse = do
+    code <- transExpr e
+    return $ code . instrSS
+        [ BinIns CMP trueLit (Reg EAX)
+        , Jump JE $ JmpLabel lTrue
+        , Jump JMP $ JmpLabel lFalse
+        ]
 
 binOp ops ret = instrSS ((POP $ Reg ECX) : ops) . ret
 
@@ -852,7 +853,7 @@ getExprType (EArrAcc  expr1 _           ) = do
     (Arr t) <- getExprType expr1
     return t
 getExprType (EMethCall expr (Ident name) es) = do
-    Cls (Ident cls) <- getExprType expr --TODO: pattern matching wysypany?
+    Cls (Ident cls) <- getExprType expr
     accCode         <- transAccessible expr
     vmts            <- gets vmts
     case M.lookup cls vmts of
@@ -899,23 +900,19 @@ chooseOp op = case op of
     EQU -> JE
     NE  -> JNE
 
-data Register = EAX | ECX | EBX | EDX | EBP | ESP -- deriving Eq
+data Register = EAX | ECX  | EDX | EBP | ESP
 instance Show Register where
     show EBP = "%ebp"
     show ESP = "%esp"
     show EAX = "%eax"
-    show EBX = "%ebx"
     show EDX = "%edx"
     show ECX = "%ecx"
---   show EDI = "%edi"
---   show ESI = "%esi"
 
 data Memory = Local Integer | Param Integer | Attribute  Integer
 instance Show Memory where
     show (Param     n) = show (dword * (n + 1)) ++ "(" ++ show EBP ++ ")"
     show (Local     n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
-    show (Attribute n) = show (dword * n) ++ "(" ++ show EAX ++ ")" --TODO: check czy EAX ale no powinien.
-    -- show (Stack n) = show (-dword * n) ++ "(" ++ show EBP ++ ")"
+    show (Attribute n) = show (dword * n) ++ "(" ++ show EAX ++ ")"
 
 data Operand = Reg Register
     | AttrAddr Integer Register
@@ -969,6 +966,8 @@ instance Show Label where
     show (StrLabel i _) = ".LC" ++ show i
 
 data Instr = Intro
+    | DataSection
+    | TextSection
     | Prologue
     | StackAlloc Integer
     | Epilogue
@@ -986,12 +985,13 @@ data Instr = Intro
     | Lab Label
     | VMTable [String]
 
---TODO: .data
 instance Show Instr where
-    show Intro = ".text\n.globl main\n"
+    show Intro       = ".globl main"
+    show DataSection = ".data"
+    show TextSection = "\n.text"
     show Prologue =
         show (PUSH $ Reg EBP) ++ "\n\t" ++ show (MOV (Reg ESP) $ Reg EBP)
-    show (StackAlloc n) = show $ BinIns SUB (Lit (dword * n)) $ Reg ESP --TODO: align 16
+    show (StackAlloc n) = show $ BinIns SUB (Lit (dword * n)) $ Reg ESP
     show Epilogue =
         show (MOV (Reg EBP) $ Reg ESP) ++ "\n\t" ++ show (POP $ Reg EBP)
     show (CALL  l _      ) = "call " ++ l
@@ -1005,7 +1005,7 @@ instance Show Instr where
     show (Jump  unop unin) = show unop ++ " " ++ show unin
     show (BinIns bop bin1 bin2) =
         show bop ++ " " ++ show bin1 ++ ", " ++ show bin2
-    show (Lab     l@(StrLabel _i s)) = show l ++ ":\n    .asciz " ++ show s -- ew. .asciz, no idea
+    show (Lab     l@(StrLabel _i s)) = show l ++ ":\t.asciz " ++ show s
     show (Lab     l                ) = show l ++ ":"
     show (VMTable ms               ) = ".int " ++ intercalate ", " ms
 
@@ -1018,8 +1018,12 @@ instrS :: Instr -> InstrS
 instrS = (:)
 
 indent :: Instr -> String
-indent (Lab _) = ""
-indent _       = "\t"
+indent Intro       = ""
+indent DataSection = ""
+indent TextSection = ""
+indent (Lab     _) = ""
+indent (VMTable _) = ""
+indent _           = "\t"
 x86 :: [Instr] -> CM String
 x86 ins = return $ (unlines . map (\x -> indent x ++ show x)) ins
 

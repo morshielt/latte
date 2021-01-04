@@ -42,15 +42,16 @@ checkReturns = mapM_ checkTopDefReturn
                     ++ ident
                     ++ "`"
 
-    checkReturn :: Stmt -> TCM Bool
-    checkReturn (Ret _)                    = return True
-    checkReturn VRet                       = return True
-    checkReturn (While ELitTrue s        ) = checkReturn s
-    checkReturn (Cond  ELitTrue s        ) = checkReturn s
-    checkReturn (CondElse ELitTrue  s1 _ ) = checkReturn s1
-    checkReturn (CondElse ELitFalse _  s2) = checkReturn s2
-    checkReturn (CondElse _ s1 s2) = (&&) <$> checkReturn s1 <*> checkReturn s2
-    checkReturn (BStmt (Block ss)        ) = foldM checkOr False ss
-        where checkOr acc s = (||) acc <$> checkReturn s
-    checkReturn _ = return False
+checkReturn :: Stmt -> TCM Bool
+checkReturn (Ret _)                    = return True
+checkReturn VRet                       = return True
+checkReturn (While ELitTrue s        ) = checkReturn s
+checkReturn (Cond  ELitTrue s        ) = checkReturn s
+checkReturn (CondElse ELitTrue  s1 _ ) = checkReturn s1
+checkReturn (CondElse ELitFalse _  s2) = checkReturn s2
+checkReturn (CondElse _ s1 s2) = (&&) <$> checkReturn s1 <*> checkReturn s2
+checkReturn (BStmt (Block ss)        ) = foldM checkOr False ss
+    where checkOr acc s = (||) acc <$> checkReturn s
+checkReturn (SExp (EApp (Ident "error") _)) = return True
+checkReturn _                               = return False
 

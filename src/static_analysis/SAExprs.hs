@@ -39,7 +39,7 @@ checkExprM e@(ERel e1 EQU e2) =
 checkExprM e@(ERel e1 NE e2) =
     checkBinOp [TInt, TString, TBool, wildcardClass] e1 e2 >> return TBool
 
-checkExprM e@(ERel e1 _ e2) = checkBinOp [TInt] e1 e2 >> return TBool
+checkExprM e@(ERel e1 _ e2) = checkBinOp [TInt, TString] e1 e2 >> return TBool
 checkExprM e@(EAnd e1 e2  ) = checkBinOp [TBool] e1 e2
 checkExprM e@(EOr  e1 e2  ) = checkBinOp [TBool] e1 e2
 
