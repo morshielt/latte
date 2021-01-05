@@ -109,7 +109,7 @@ transLValue (EMethCall expr (Ident name) es) = do
     return $ argsCode . accCode . instrSS
         [ PUSH $ Reg EAX
         , MOV (Addr 0 EAX) (Reg EAX)
-        , CALLM (MethAddr offset EAX) $ fromIntegral $ length es
+        , CALLM (MethAddr offset EAX)
         , BinIns ADD (Lit (dword * (1 + fromIntegral (length es)))) $ Reg ESP
         ]
 
@@ -119,7 +119,7 @@ transLValue (EApp (Ident var) es) = do
             foldr (\x acc -> x . instrS (PUSH $ Reg EAX) . acc) id (reverse es')
     t <- getFunRet var
     return $ argsCode . instrSS
-        [ CALL var $ fromIntegral $ length es
+        [ CALL var
         , BinIns ADD (Lit (dword * fromIntegral (length es))) $ Reg ESP
         ]
 
@@ -133,7 +133,7 @@ transLValue e@(ENew (Cls (Ident clsName)) ClsNotArr) = do
         $ instrSS
               [ PUSH $ Lit dword
               , PUSH $ Lit numMem
-              , CALL "calloc" 2
+              , CALL "calloc"
               , BinIns ADD (Lit $ dword * 2) $ Reg ESP
               ]
         . vtable
@@ -145,7 +145,7 @@ transLValue (ENew type_ (ArrSize sizeExpr)) = do
         , UnIns INC (Reg EAX)
         , PUSH $ Lit dword
         , PUSH $ Reg EAX
-        , CALL "calloc" 2
+        , CALL "calloc"
         , BinIns ADD (Lit $ dword * 2) $ Reg ESP
         , POP (Reg EDX)
         , MOV (Reg EDX) (Addr 0 EAX)
@@ -265,7 +265,6 @@ transExpr e@(ERel e1 op e2) = do
             , MOV trueLit (Reg EAX)
             , Lab $ JmpLabel afterLabel
             ]
-
 transExpr e@(EAnd e1 e2) = do
     falseLabel <- getFreeLabel
     trueLabel  <- getFreeLabel
@@ -279,7 +278,6 @@ transExpr e@(EAnd e1 e2) = do
         , MOV falseLit (Reg EAX)
         , Lab $ JmpLabel afterLabel
         ]
-
 transExpr e@(EOr e1 e2) = do
     falseLabel <- getFreeLabel
     trueLabel  <- getFreeLabel
@@ -294,6 +292,7 @@ transExpr e@(EOr e1 e2) = do
         , Lab $ JmpLabel afterLabel
         ]
 
+binOp :: [Instr] -> InstrS -> InstrS
 binOp ops ret = instrSS ((POP $ Reg ECX) : ops) . ret
 
 transBinOp :: Expr -> Expr -> InstrS -> CM InstrS
@@ -303,6 +302,7 @@ transBinOp e1 e2 opCode = do
     return $ code1 . instrS (PUSH $ Reg EAX) . code2 . opCode . instrS
         (MOV (Reg ECX) (Reg EAX))
 
+-- jumping code generation
 transCond :: Expr -> Integer -> Integer -> CM InstrS
 transCond e@(ERel e1 op e2) lThen lElse = do
     t <- getExprType e1
@@ -325,44 +325,23 @@ transCond e@(ERel e1 op e2) lThen lElse = do
             , POP $ Reg EAX
             , BinIns CMP (Reg ECX) $ Reg EAX
             , Jump (chooseOp op) $ JmpLabel lThen
-                -- , MOV falseLit (Reg EAX)
             , Jump JMP $ JmpLabel lElse
-                -- , Lab $ JmpLabel trueLabel
-                -- , MOV trueLit (Reg EAX)
-                -- , Lab $ JmpLabel afterLabel
             ]
-
-
--- transCond (EAnd c1 c2) lTrue lFalse = do
---     lMid <- getFreeLabel
---     transCond c1 lMid lFalse
---     emit $ placeLabel lMid
---     transCond c2 lTrue lFalse
 transCond (EAnd c1 c2) lTrue lFalse = do
     lMid  <- getFreeLabel
     code1 <- transCond c1 lMid lFalse
-    -- emit $ placeLabel lMid
     code2 <- transCond c2 lTrue lFalse
     return $ code1 . instrS (Lab $ JmpLabel lMid) . code2
-
-transCond ELitTrue lTrue lFalse = return $ instrS (Jump JMP $ JmpLabel lTrue)
-transCond ELitFalse lTrue lFalse = return $ instrS (Jump JMP $ JmpLabel lFalse)
-
--- transCond (COr c1 c2) lTrue lFalse = do
---     lMid <- getFreeLabel
---     transCond c1 lTrue lMid
---     emit $ placeLabel lMid
---     transCond c2 lTrue lFalse
 transCond (EOr c1 c2) lTrue lFalse = do
     lMid  <- getFreeLabel
     code1 <- transCond c1 lTrue lMid
     code2 <- transCond c2 lTrue lFalse
     return $ code1 . instrS (Lab $ JmpLabel lMid) . code2
+transCond (Not c)   lTrue lFalse = transCond c lFalse lTrue
 
--- transCond (CNot c) lTrue lFalse = genCond c lFalse lTrue
-transCond (Not c) lTrue lFalse = transCond c lFalse lTrue
-
-transCond e       lTrue lFalse = do
+transCond ELitTrue  lTrue lFalse = return $ instrS (Jump JMP $ JmpLabel lTrue)
+transCond ELitFalse lTrue lFalse = return $ instrS (Jump JMP $ JmpLabel lFalse)
+transCond e         lTrue lFalse = do
     code <- transExpr e
     return $ code . instrSS
         [ BinIns CMP trueLit (Reg EAX)

@@ -100,8 +100,6 @@ checkWhileIf e [s1, s2] =
 checkWhileIf _ _ =
     throwTCM "Impossible - while/if has 1 or 2 statements to check."
 
--- TODO: to pozwala na bezblokowe np. int i = 0; gdzie i już jest a to je owija w blok, tbh nie ma wielkiego znaczenia
--- ale w sumie chyba nie powinno się teoretycznie wywalać z takiego powodu?
 checkAsBStmt :: Stmt -> TCM TCEnv
 checkAsBStmt s@(BStmt _) = checkStmtM s
 checkAsBStmt s           = checkStmtM (BStmt (Block [s]))

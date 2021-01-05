@@ -32,8 +32,8 @@ runStaticAnalysis (Program prog) = runReaderT (go prog)
         , ("error"              , (TDFun [] TVoid, initScope))
         , ("readInt"            , (TDFun [] TInt, initScope))
         , ("readString"         , (TDFun [] TString, initScope))
-        , ("_____compareStrings", (TDFun [TString, TString] TInt, initScope))
-        , ("_____concatStrings" , (TDFun [TString, TString] TString, initScope))
+        , ("compareStrings_____", (TDFun [TString, TString] TInt, initScope))
+        , ("concatStrings_____" , (TDFun [TString, TString] TString, initScope))
         ]
 
     go :: [TopDef] -> TCM TCEnv

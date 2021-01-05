@@ -34,11 +34,11 @@ char* readString() {
 }
 
 void error() {
-    printf("runtime error");
+    printf("runtime error\n");
     exit(1);
 }
 
-char* _____concatStrings(char* str1, char* str2) {
+char* concatStrings_____(char* str1, char* str2) {
     if (str1 == NULL) return str2;
     if (str2 == NULL) return str1;
 
@@ -52,7 +52,7 @@ char* _____concatStrings(char* str1, char* str2) {
     return result;
 }
 
-int _____compareStrings(char* str1, char* str2) {
+int compareStrings_____(char* str1, char* str2) {
     int res;
     if (str1 == NULL && str2 != NULL) {
         res = strcmp("", str2);

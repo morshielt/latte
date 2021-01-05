@@ -3,9 +3,7 @@ import           AbsLatte
 import           ErrM
 
 import           StaticAnalysis                 ( runStaticAnalysis )
-import           Compiler                       ( compile
-                                                , x86
-                                                )
+import           Compiler                       ( compile )
 
 import           Control.Monad.Except           ( runExceptT )
 import           System.Environment             ( getArgs )
@@ -36,9 +34,7 @@ check s = case pProgram (myLexer s) of
                         hPutStrLn stderr $ "[Compilation error] " ++ e
                         exitFailure
                     Right strs -> do
-                        -- code <- x86 strs
-                        hPutStr stderr "OK\n" -- TODO: czy to 'OK' nadal ma się wypisywać?
-                        putStr strs
+                        hPutStr stderr "OK\n" -- TODO: czy to 'OK' nadal ma się wypisywać? i czy kompilować też sam typecheck do latc?
                         return strs
 
 saveFile :: String -> String -> IO ()
@@ -46,14 +42,12 @@ saveFile filename content = do
     let extension = ".s"
     let name = replaceExtension filename extension
     writeFile name content
-    return ()
 
 main :: IO ()
 main = do
     args <- getArgs
     case args of
         [file] -> readFile file >>= check >>= saveFile file
-        -- []     -> getContents >>= check
         _      -> do
-            putStrLn "usage: ./latc <src_file>"
+            putStrLn "usage: ./latc_x86 <src_file>"
             exitFailure

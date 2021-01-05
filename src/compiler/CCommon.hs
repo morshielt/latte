@@ -9,10 +9,25 @@ import           Data.List                      ( intercalate )
 import           Data.Map                      as M
                                                 ( Map )
 
+-- monad
+type CM a = ReaderT CEnv (StateT CState (ExceptT String IO)) a
+
+data CEnv = CEnv
+    { scope :: Integer
+    , varMem :: VM
+    }
+
+data CState = CState
+    { freeLabel :: Integer
+    , locals :: Integer
+    , retLabel :: String
+    , strings :: SL
+    , funRet :: VT
+    , cDefs :: CD
+    , vmts :: M.Map Var VMT
+    }
+
 type Var = String
-type Offset = Integer
--- type Label = Integer
-type Scope = Integer
 type VM = M.Map Var (Memory, Type)
 type VT = M.Map Var Type
 type SL = M.Map String Label
@@ -22,46 +37,18 @@ data CDef = CDef
     { attrs :: VT
     , meths :: VT
     , extends :: Maybe Var
-    }  deriving Show
+    }
 
 data VMT = VMT
- {  vmeths :: [ (Var, (Type, Integer, Var))]
+    { vmeths :: [ (Var, (Type, Integer, Var))]
     , vattrs :: M.Map Var (Memory, Type)
-}
-
-data CEnv = CEnv
-  { scope :: Scope
-  , varMem :: VM
-    -- , stack :: Integer
-  } --deriving Show
-
-data CState = CState
-  { freeLabel :: Integer
-  , locals :: Integer
-  , stack :: Integer
-  , maxStack :: Integer
-  , maxArgs :: Integer
-  , retLabel :: String
-  , strings :: SL
-  , funRet :: VT
-  , cDefs :: CD
-  , vmts :: M.Map Var VMT
-  , trueLabel ::Maybe Integer
-  , falseLabel ::Maybe Integer
---   , ins :: InstrS
-  } --deriving Show
-
--- type CMonad a = RWS CEnv AsmStmts CState a
-
-type CM a = ReaderT CEnv (StateT CState (ExceptT String IO)) a
+    }
 
 throwCM :: String -> CM a
 throwCM = lift . lift . throwE
 
-trueLit = Lit 1
-falseLit = Lit 0
-nullPtr = Lit 0
-
+-- x86 intermediate code
+chooseOp :: RelOp -> JOp
 chooseOp op = case op of
     LTH -> JL
     LE  -> JLE
@@ -108,8 +95,17 @@ instance Show Operand where
     show (VTMLit l    ) = '$' : l
     show (StrLit i    ) = '$' : show (StrLabel i "")
 
-data JOp = JL | JLE | JG | JGE | JE | JNE | JMP deriving Show
-data BinOp = ADD | SUB | MUL | DIV | XOR | CMP -- deriving Show -- deriving Eq  --  SAL
+data JOp = JL | JLE | JG | JGE | JE | JNE | JMP
+instance Show JOp where
+    show JL  = "jl"
+    show JLE = "jle"
+    show JG  = "jg"
+    show JGE = "jge"
+    show JE  = "je"
+    show JNE = "jne"
+    show JMP = "jmp"
+
+data BinOp = ADD | SUB | MUL | DIV | XOR | CMP
 instance Show BinOp where
     show ADD = "addl "
     show SUB = "subl "
@@ -141,8 +137,8 @@ data Instr = Intro
     | Prologue
     | StackAlloc Integer
     | Epilogue
-    | CALL String Integer
-    | CALLM Operand Integer
+    | CALL String
+    | CALLM Operand
     | MOV Operand Operand
     | LEA Operand Operand
     | PUSH Operand
@@ -154,7 +150,6 @@ data Instr = Intro
     | BinIns BinOp Operand Operand
     | Lab Label
     | VMTable [String]
-
 instance Show Instr where
     show Intro       = ".globl main"
     show DataSection = ".data"
@@ -164,10 +159,10 @@ instance Show Instr where
     show (StackAlloc n) = show $ BinIns SUB (Lit (dword * n)) $ Reg ESP
     show Epilogue =
         show (MOV (Reg EBP) $ Reg ESP) ++ "\n\t" ++ show (POP $ Reg EBP)
-    show (CALL  l _      ) = "call " ++ l
-    show (CALLM l _      ) = "call " ++ show l
-    show (MOV   o r      ) = "movl " ++ show o ++ ", " ++ show r
-    show (LEA   o r      ) = "leal " ++ show o ++ ", " ++ show r
+    show (CALL  l        ) = "call " ++ l
+    show (CALLM l        ) = "call " ++ show l
+    show (MOV o r        ) = "movl " ++ show o ++ ", " ++ show r
+    show (LEA o r        ) = "leal " ++ show o ++ ", " ++ show r
     show (PUSH op        ) = "pushl " ++ show op
     show (POP  op        ) = "popl " ++ show op
     show (ZIns zin       ) = show zin
@@ -179,7 +174,24 @@ instance Show Instr where
     show (Lab     l                ) = show l ++ ":"
     show (VMTable ms               ) = ".int " ++ intercalate ", " ms
 
+
 dword = 4
+trueLit = Lit 1
+falseLit = Lit 0
+nullPtr = Lit 0
+
+vmtLabel :: Var -> String
+vmtLabel cls = methodLabel cls "VMT"
+
+methodLabel :: Var -> Var -> String
+methodLabel cls method = cls ++ "." ++ method
+
+getFreeLabel :: CM Integer
+getFreeLabel = do
+    label <- gets freeLabel
+    modify (\st -> st { freeLabel = label + 1 })
+    return label
+
 
 type InstrS = [Instr] -> [Instr]
 instrSS :: [Instr] -> InstrS
@@ -195,14 +207,8 @@ indent (Lab     _) = ""
 indent (VMTable _) = ""
 indent _           = "\t"
 
+printInstrs :: [Instr] -> CM String
+printInstrs ins = return $ (unlines . map (\x -> indent x ++ show x)) ins
 
-vmtLabel :: Var -> String
-vmtLabel cls = methodLabel cls "VMT"
 
-methodLabel cls method = cls ++ "." ++ method
 
-getFreeLabel :: CM Integer
-getFreeLabel = do
-    label <- gets freeLabel
-    modify (\st -> st { freeLabel = label + 1 })
-    return label
