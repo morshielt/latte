@@ -63,6 +63,7 @@ SExp.      Stmt ::= Expr  ";" ;
 For.       Stmt ::= "for" "(" Type Ident ":" Expr ")" Stmt ;
 
 -- types ---------------------------------------------------
+
 Arr.       Type  ::= Type "[]" ;
 
 Cls.       Type ::= Ident ;
@@ -82,7 +83,7 @@ separator  Type "," ;
 
 -- expressions ---------------------------------------------
 
-- - assignables - - - - - - - - - - - - - - - - - - - - - -
+-- assignables ---------------------------------------------
 
 EVar.      Expr8 ::= Ident ;
 
@@ -90,7 +91,7 @@ EAttrAcc.  Expr8 ::= Expr7 "." Ident ;
 
 EArrAcc.   Expr8 ::= Expr7 "[" Expr "]" ;
 
-- - accessibles - - - - - - - - - - - - - - - - - - - - - -
+-- accessibles ---------------------------------------------
 
 EMethCall. Expr7 ::= Expr7 "." Ident "(" [Expr] ")" ;
 
@@ -102,9 +103,9 @@ ArrSize.   ArrSize ::= "[" Expr "]" ;
 
 ClsNotArr. ArrSize ::= ;
 
-- - lower level expressions - - - - - - - - - - - - - - - -
+-- lower level expressions ---------------------------------
 
-ECastNull.     Expr6 ::= "(" Ident ")null";
+ECastNull. Expr6 ::= "(" Ident ")null";
 
 ELitInt.   Expr6 ::= Integer ;
 

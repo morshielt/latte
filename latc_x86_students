@@ -1,0 +1,4 @@
+#!/bin/bash
+./compiler $@
+gcc -m32 -o "${@%.*}.o" -c "${@%.*}.s"
+ld -o ${@%.*} "${@%.*}.o" -melf_i386 -L/home/students/inf/PUBLIC/MRJP/lib32 /home/students/inf/PUBLIC/MRJP/lib32/crt?.o -lc

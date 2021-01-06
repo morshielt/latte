@@ -1,0 +1,3 @@
+#!/bin/bash
+./compiler $@
+gcc -m32 lib/runtime.o "${@%.*}.s" -o ${@%.*}

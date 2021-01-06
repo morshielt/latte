@@ -25,12 +25,12 @@ for dir in "${strings[@]}"; do
     for filename in ${dir}/*.lat; do
         
 
-        OUT=$( ( ./latc "$filename" ) 2> errFile)
+        OUT=$( ( ./latc_x86 "$filename" ) 2> errFile)
         ERROR=$(<errFile)
         
 
-        # ERROR=$( ( ./latc "$filename" ) 2>&1 )
-        # OUTPUT=$(./latc "$filename")
+        # ERROR=$( ( ./compiler "$filename" ) 2>&1 )
+        # OUTPUT=$(./compiler "$filename")
 
         if [ "$EXPECT" != "$ERROR" ]
         then
@@ -38,7 +38,7 @@ for dir in "${strings[@]}"; do
             CTR=$((CTR+1))
             # echo $ERROR
         else
-            gcc -m32 lib/runtime.o ${filename%%.*}.s -o ${filename%%.*}
+            # gcc -m32 lib/runtime.o ${filename%%.*}.s -o ${filename%%.*}
             # ./${filename%%.*} > outFile
 
             if [ ! -f ${filename%%.*}.input ]; then
@@ -79,12 +79,12 @@ done
 
 for filename in lattests201003/lattests/bad/*.lat; do
     # echo $filename
-    # ./latc "$filename"
+    # ./compiler "$filename"
     # echo ""
 
 
-     ERROR=$( ( ./latc "$filename" ) 2>&1 )
-        # OUTPUT=$(./latc "$filename")
+     ERROR=$( ( ./compiler "$filename" ) 2>&1 )
+        # OUTPUT=$(./compiler "$filename")
 
         if [ "$EXPECT" == "$ERROR" ]
         then

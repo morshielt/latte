@@ -1,20 +1,38 @@
 # latte
 
-Latte Frontend with extensions:
+
+TODO: Plik tekstowy README opisujący szczegóły kompilacji [x] i uruchamiania programu[x], używane narzędzia i biblioteki[x], zaimplementowane rozszerzenia[x], strukturę katalogów projektu[TODO:], ewentualnie odnośniki do bardziej szczegółowej dokumentacji[xwhatever].
+
+Latte x86 (AT&T) (stack machine) compiler with extensions:
     - arrays
     - structs
+    - objects
     - objects with virtual methods.
 
+Compiler was written in Haskell using standard library.
 
-Usage: 
+Additional requirements:
+`gcc-multilib` - 32-bit gcc libraries on 64-bit system
+
+Usage (when `gcc-multilib` installed): 
 ```
 make
-./latc <file>
+./latc_x86 <file>
 ```
-gcc -m32 ../lib/runtime.o test1.s -o test1
 
+Usage on `students`:
+```
+make students
+./latc_x86_students
+```
 
+-- TODO: czy ./latc też ma być?
+-- TODO: wypisywać to: ?
 Compiler writes "OK\n" to stderr if it accepts the program and returns code 0,
 otherwise it writes "ERROR\n" and according error message to stderr and returns code 1.
 
+Extra assumptions:
+    - attribute (class field) name shadowing is forbidden
+    - reserved identifiers: "compareStrings_____", "concatStrings_____", "___iter", "___arr_ptr"
+    - null cast has to be written without space: `(Node)null`
 

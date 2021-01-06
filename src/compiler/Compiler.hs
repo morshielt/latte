@@ -22,7 +22,7 @@ import           Data.Map                      as M
 --DONE: porównanie stringów to porównanie referencji czy zawartości?
 --DONE:[ale jakoś szału nie ma xD] poprawić transCond domyślny na ręcznie napisany
 --DONE: co jak nazwiemy zmienną 'null'? nic, whatever, czemu nie XD
--- DONE: czy (A)null == (B)null? nie powinno, typecheck poiwnien wywalać
+--DONE: czy (A)null == (B)null? nie powinno, typecheck poiwnien wywalać
 --DONE: przetestować tablice tablic/obiektów/stringów
 --DONE: strcmp stringów pełen
 --DONE: list.s, VTable niech się nie ładuje/wypisuje
