@@ -1,7 +1,7 @@
 # latte
 
 
-TODO: Plik tekstowy README opisujący szczegóły kompilacji [x] i uruchamiania programu[x], używane narzędzia i biblioteki[x], zaimplementowane rozszerzenia[x], strukturę katalogów projektu[TODO:], ewentualnie odnośniki do bardziej szczegółowej dokumentacji[xwhatever].
+strukturę katalogów projektu[TODO:]
 
 Latte x86 (AT&T) (stack machine) compiler with extensions:
     - arrays
@@ -23,7 +23,7 @@ make
 Usage on `students`:
 ```
 make students
-./latc_x86_students
+./latc_x86_students <file>
 ```
 
 -- TODO: czy ./latc też ma być?
