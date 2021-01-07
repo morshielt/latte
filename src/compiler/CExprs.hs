@@ -36,7 +36,8 @@ getExprType (EMethCall expr (Ident name) es) = do
     return t
 getExprType (EApp (Ident ident) _        ) = getFunRet ident
 getExprType (ENew cls           ClsNotArr) = return cls
-getExprType (ECastNull ident             ) = return $ Cls ident
+getExprType (ECastNull (Cls ident)       ) = return $ Cls ident
+getExprType (ECastNull (Arr t    )       ) = return (Arr t)
 getExprType ELitInt{}                      = return Int
 getExprType ELitTrue                       = return Bool
 getExprType ELitFalse                      = return Bool
@@ -114,14 +115,29 @@ transLValue (EMethCall expr (Ident name) es) = do
         ]
 
 transLValue (EApp (Ident var) es) = do
-    es' <- mapM transExpr es
-    let argsCode =
-            foldr (\x acc -> x . instrS (PUSH $ Reg EAX) . acc) id (reverse es')
-    t <- getFunRet var
-    return $ argsCode . instrSS
-        [ CALL var
-        , BinIns ADD (Lit (dword * fromIntegral (length es))) $ Reg ESP
-        ]
+    inClassMethod <- asks inClassMethod
+    case inClassMethod of
+        Nothing  -> handleEAppLValue
+        Just cls -> do
+            vmts <- gets vmts
+            case M.lookup cls vmts of
+                Nothing  -> throwCM "Impossible after type check"
+                Just vmt -> case M.lookup var $ M.fromList $ vmeths vmt of
+                    Nothing -> handleEAppLValue
+                    Just _  -> transLValue
+                        (EMethCall (EVar (Ident "self")) (Ident var) es)
+  where
+    handleEAppLValue = do
+        es' <- mapM transExpr es
+        let
+            argsCode = foldr (\x acc -> x . instrS (PUSH $ Reg EAX) . acc)
+                             id
+                             (reverse es')
+        t <- getFunRet var
+        return $ argsCode . instrSS
+            [ CALL var
+            , BinIns ADD (Lit (dword * fromIntegral (length es))) $ Reg ESP
+            ]
 
 transLValue e@(ENew (Cls (Ident clsName)) ClsNotArr) = do
     vmt <- getVmts e

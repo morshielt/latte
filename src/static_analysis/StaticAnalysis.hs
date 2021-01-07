@@ -131,10 +131,11 @@ saveClassesMembers ss = do
                 env    <- ask
                 clsDef <- getSureClassDef cls
                 checkIfMemberExists (members clsDef) ident
+                when (checkIfVoid type_)
+                    $ throwTCM "Illegal void type attribute declaration"
                 t <- typeToTCType type_
-                let clsDef' = clsDef
-                        { members = M.insert ident t $ members clsDef
-                        }
+                let clsDef' =
+                        clsDef { members = M.insert ident t $ members clsDef }
                 return $ env { classes = M.insert cls clsDef' (classes env) }
               where
                 checkIfMemberExists :: M.Map Var TCType -> Var -> TCM ()
@@ -177,18 +178,21 @@ checkClassDefsM ss = do
         getClsAttrs clsDef =
             return
                 $ map (\(i, t) -> (i, (t, initScope + 1)))
-                $ filter notFun
                 $ M.toList
                 $ members clsDef
-        notFun (_, TDFun{}) = False
-        notFun _            = True
 
         goAddAttrsToEnv :: Var -> TCEnv -> ClMember -> TCM TCEnv
         goAddAttrsToEnv ident env cmembers =
             local (const env) $ addAttrsToEnv ident cmembers `throwExtraMsg` msg
           where
             addAttrsToEnv :: Var -> ClMember -> TCM TCEnv
-            addAttrsToEnv cls Meth{}                     = ask
+            addAttrsToEnv cls (Meth ret (Ident ident) args _) = do
+                clsDef <- getSureClassDef cls
+                t      <- typeToTCType $ Fun ret (map (\(Arg t _) -> t) args)
+                env    <- ask
+                return env
+                    { types = M.insert ident (t, initScope + 1) $ types env
+                    }
             addAttrsToEnv cls (Attr type_ (Ident ident)) = do
                 clsDef <- getSureClassDef cls
                 t      <- typeToTCType type_
@@ -274,14 +278,10 @@ handleArgs args = do
     scope <- asks scope
     list  <- mapM
         (\(Arg t (Ident var)) -> do
+            when (checkIfVoid t)
+                $ throwTCM "Illegal void type function parameter"
             t' <- typeToTCType t
-            if t' == TVoid
-                then
-                    throwTCM
-                    $  "Illegal `void` type function parameter `"
-                    ++ var
-                    ++ "`"
-                else return (var, (t', scope + 1))
+            return (var, (t', scope + 1))
         )
         args
     let mapList = fromList list

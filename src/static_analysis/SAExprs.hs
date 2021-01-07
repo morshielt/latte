@@ -18,30 +18,36 @@ checkExpr :: Expr -> TCM TCType
 checkExpr expr = checkExprM expr `throwExtraMsg` msg expr
 
 checkExprM :: Expr -> TCM TCType
-checkExprM (ECastNull ident@(Ident cls)) =
+
+checkExprM (ECastNull (Arr t)) =
+    checkIfClassExistsT t >> TArr <$> typeToTCType t
+checkExprM (ECastNull (Cls ident@(Ident cls))) =
     checkIfClassExistsT (Cls ident) >> return (TDClass cls)
-checkExprM (EVar    (Ident var)) = getVarType var
+checkExprM (ECastNull _          ) = throwTCM "Illegal cast"
+checkExprM (EVar      (Ident var)) = getVarType var
 
-checkExprM (EString _          ) = return TString
-checkExprM (ELitInt _          ) = return TInt
-checkExprM ELitTrue              = return TBool
-checkExprM ELitFalse             = return TBool
+checkExprM (EString   _          ) = return TString
+checkExprM (ELitInt   _          ) = return TInt
+checkExprM ELitTrue                = return TBool
+checkExprM ELitFalse               = return TBool
 
-checkExprM (  Not e           )  = matchExpType' TBool e
-checkExprM (  Neg e           )  = matchExpType' TInt e
+checkExprM (Not e           )      = matchExpType' TBool e
+checkExprM (Neg e           )      = matchExpType' TInt e
 
-checkExprM e@(EMul e1 _     e2)  = checkBinOp [TInt] e1 e2
-checkExprM e@(EAdd e1 Plus  e2)  = checkBinOp [TInt, TString] e1 e2
-checkExprM e@(EAdd e1 Minus e2)  = checkBinOp [TInt] e1 e2
+checkExprM (EMul e1 _     e2)      = checkBinOp [TInt] e1 e2
+checkExprM (EAdd e1 Plus  e2)      = checkBinOp [TInt, TString] e1 e2
+checkExprM (EAdd e1 Minus e2)      = checkBinOp [TInt] e1 e2
 
-checkExprM e@(ERel e1 EQU e2) =
-    checkBinOp [TInt, TString, TBool, wildcardClass] e1 e2 >> return TBool
-checkExprM e@(ERel e1 NE e2) =
-    checkBinOp [TInt, TString, TBool, wildcardClass] e1 e2 >> return TBool
+checkExprM (ERel e1 EQU e2) =
+    checkEqBinOp [TInt, TString, TBool, wildcardClass, wildcardArr] e1 e2
+        >> return TBool
+checkExprM (ERel e1 NE e2) =
+    checkEqBinOp [TInt, TString, TBool, wildcardClass, wildcardArr] e1 e2
+        >> return TBool
 
-checkExprM e@(ERel e1 _ e2) = checkBinOp [TInt, TString] e1 e2 >> return TBool
-checkExprM e@(EAnd e1 e2  ) = checkBinOp [TBool] e1 e2
-checkExprM e@(EOr  e1 e2  ) = checkBinOp [TBool] e1 e2
+checkExprM (ERel e1 _ e2) = checkBinOp [TInt, TString] e1 e2 >> return TBool
+checkExprM (EAnd e1 e2  ) = checkBinOp [TBool] e1 e2
+checkExprM (EOr  e1 e2  ) = checkBinOp [TBool] e1 e2
 
 checkExprM (ENew (Cls (Ident clsName)) ClsNotArr) =
     checkIfClassExists clsName >> return (TDClass clsName)
@@ -49,8 +55,8 @@ checkExprM (ENew type_ (ArrSize sizeExpr)) = do
     checkIfClassExistsT type_
     matchExpType' TInt sizeExpr
     TArr <$> typeToTCType type_
-checkExprM e@(ENew    _     _    ) = throwTCM "Illegal `new` expression"
-checkExprM (  EArrAcc expr1 expr2) = do
+checkExprM (ENew    _     _    ) = throwTCM "Illegal `new` expression"
+checkExprM (EArrAcc expr1 expr2) = do
     (TArr act) <- matchExpType' wildcardArr expr1
     matchExpType' TInt expr2
     return act
@@ -122,13 +128,28 @@ checkBinOp :: [TCType] -> Expr -> Expr -> TCM TCType
 checkBinOp ts e1 e2 = do
     e1T <- checkExprM e1
     e2T <- checkExprM e2
+    matchType ts    e1T
+    matchType [e1T] e2T
+    return e1T
+
+checkEqBinOp :: [TCType] -> Expr -> Expr -> TCM TCType
+checkEqBinOp ts e1 e2 = do
+    e1T <- checkExprM e1
+    e2T <- checkExprM e2
     case (e1T, e2T) of
         (TDClass e1C, TDClass e2C) -> checkAnyClassCompatibility e1C e2C
+        (TArr    t1 , TArr t2    ) -> checkArrCompatibility t1 t2
         _                          -> do
             matchType ts    e1T
             matchType [e1T] e2T
     return e1T
   where
+    checkArrCompatibility :: TCType -> TCType -> TCM ()
+    checkArrCompatibility (TArr t1) (TArr t2) = checkArrCompatibility t1 t2
+    checkArrCompatibility (TDClass t1) (TDClass t2) =
+        checkAnyClassCompatibility t1 t2
+    checkArrCompatibility t1 t2 = matchType [t1] t2
+
     checkAnyClassCompatibility :: Var -> Var -> TCM ()
     checkAnyClassCompatibility cls1 cls2 = do
         compatibles1 <- getCompatibleClasses cls1

@@ -8,7 +8,9 @@ CTR=1
 
 
 strings=(
+    # "lattests201003/lattests/bad"
     "lattests201003/lattests/good"
+    "good"
     "lattests201003/lattests/extensions/objects1"
     "lattests201003/lattests/extensions/objects2"
     "lattests201003/lattests/extensions/struct"

@@ -105,7 +105,7 @@ ClsNotArr. ArrSize ::= ;
 
 -- lower level expressions ---------------------------------
 
-ECastNull. Expr6 ::= "(" Ident ")null";
+ECastNull. Expr6 ::= "(" Type ")null";
 
 ELitInt.   Expr6 ::= Integer ;
 

@@ -60,7 +60,7 @@ data Expr
     | EMethCall Expr Ident [Expr]
     | EApp Ident [Expr]
     | ENew Type ArrSize
-    | ECastNull Ident
+    | ECastNull Type
     | ELitInt Integer
     | ELitTrue
     | ELitFalse

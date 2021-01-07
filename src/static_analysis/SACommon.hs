@@ -97,6 +97,11 @@ matchType exs act =
         ++ "\nActual type:"
         ++ show act
 
+checkIfVoid :: Type -> Bool
+checkIfVoid (Arr t) = checkIfVoid t
+checkIfVoid Void    = True
+checkIfVoid _       = False
+
 getCompatibleClasses :: Var -> TCM [Var]
 getCompatibleClasses cls = getCompatibles [cls] cls
   where

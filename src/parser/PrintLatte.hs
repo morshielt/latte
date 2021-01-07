@@ -162,7 +162,7 @@ instance Print Expr where
     EMethCall expr id exprs -> prPrec i 7 (concatD [prt 7 expr, doc (showString "."), prt 0 id, doc (showString "("), prt 0 exprs, doc (showString ")")])
     EApp id exprs -> prPrec i 7 (concatD [prt 0 id, doc (showString "("), prt 0 exprs, doc (showString ")")])
     ENew type_ arrsize -> prPrec i 7 (concatD [doc (showString "new"), prt 0 type_, prt 0 arrsize])
-    ECastNull id -> prPrec i 6 (concatD [doc (showString "("), prt 0 id, doc (showString ")null")])
+    ECastNull type_ -> prPrec i 6 (concatD [doc (showString "("), prt 0 type_, doc (showString ")null")])
     ELitInt n -> prPrec i 6 (concatD [prt 0 n])
     ELitTrue -> prPrec i 6 (concatD [doc (showString "true")])
     ELitFalse -> prPrec i 6 (concatD [doc (showString "false")])

@@ -2,7 +2,6 @@
 
 
 strukturę katalogów projektu[TODO:]
-
 Latte x86 (AT&T) (stack machine) compiler with extensions:
 - arrays
 - structs
@@ -26,13 +25,13 @@ make students
 ./latc_x86_students <file>
 ```
 
--- TODO: czy ./latc też ma być?
--- TODO: wypisywać to: ?
 Compiler writes "OK\n" to stderr if it accepts the program and returns code 0,
 otherwise it writes "ERROR\n" and according error message to stderr and returns code 1.
 
 Extra assumptions:
 - attribute (class field) name shadowing is forbidden
 - reserved identifiers: "compareStrings_____", "concatStrings_____", "___iter", "___arr_ptr"
-- null cast has to be written without space: `(Node)null`
+- reserved function's/method's names starting with "ret_"
+- null cast has to be written without space: `(ClassNameOrArrayType)null`
+- functions, methods and variables must have different names
 

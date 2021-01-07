@@ -15,6 +15,7 @@ type CM a = ReaderT CEnv (StateT CState (ExceptT String IO)) a
 data CEnv = CEnv
     { scope :: Integer
     , varMem :: VM
+    , inClassMethod :: Maybe Var
     }
 
 data CState = CState
@@ -156,6 +157,7 @@ instance Show Instr where
     show TextSection = "\n.text"
     show Prologue =
         show (PUSH $ Reg EBP) ++ "\n\t" ++ show (MOV (Reg ESP) $ Reg EBP)
+    show (StackAlloc 0) = ""
     show (StackAlloc n) = show $ BinIns SUB (Lit (dword * n)) $ Reg ESP
     show Epilogue =
         show (MOV (Reg EBP) $ Reg ESP) ++ "\n\t" ++ show (POP $ Reg EBP)

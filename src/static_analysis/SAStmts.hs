@@ -21,7 +21,7 @@ checkStmtM (SExp e) = do
     ask
 
 checkStmtM (Decl t ds) = do
-    when (t == Void) $ throwTCM "Illegal void type variable declaration"
+    when (checkIfVoid t) $ throwTCM "Illegal void type variable declaration"
     checkIfClassExistsT t
     env <- ask
     foldM go env ds

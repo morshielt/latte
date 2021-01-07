@@ -34,7 +34,7 @@ check s = case pProgram (myLexer s) of
                         hPutStrLn stderr $ "[Compilation error] " ++ e
                         exitFailure
                     Right strs -> do
-                        hPutStr stderr "OK\n" -- TODO: czy to 'OK' nadal ma się wypisywać? i czy kompilować też sam typecheck do latc?
+                        hPutStr stderr "OK\n"
                         return strs
 
 saveFile :: String -> String -> IO ()

@@ -16,24 +16,9 @@ import           Data.Map                      as M
                                                 , elems
                                                 , fromList
                                                 )
---DONE: wywołanie error() liczy się jako return w return checkerze!!!
---DONE: spr w typecheck czy ktoś nie deklaruje klasy 'bool' 'int' czy coś XDDD nie da się
---DONE: zmienne o nazwie self w metodach!
---DONE: porównanie stringów to porównanie referencji czy zawartości?
---DONE:[ale jakoś szału nie ma xD] poprawić transCond domyślny na ręcznie napisany
---DONE: co jak nazwiemy zmienną 'null'? nic, whatever, czemu nie XD
---DONE: czy (A)null == (B)null? nie powinno, typecheck poiwnien wywalać
---DONE: przetestować tablice tablic/obiektów/stringów
---DONE: strcmp stringów pełen
---DONE: list.s, VTable niech się nie ładuje/wypisuje
---TODO: skrypt na studentsa
---DONE: refactor
---DONE: podzielić na pliki
---TODO: README o studentsie i jakie rozszerzenia są
---DONE: importy ogar
 
 compile (Program prog) = evalStateT
-    (runReaderT (go prog) (CEnv 0 M.empty))
+    (runReaderT (go prog) (CEnv 0 M.empty Nothing))
     (CState 0 0 "" M.empty predefinedFns M.empty M.empty)
   where
     go prog = do

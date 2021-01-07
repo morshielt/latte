@@ -69,7 +69,7 @@ transMethods cls (Meth ret (Ident name) args b) = do
                 let args'WithSelf =
                         M.insert "self" (Param 1, Cls (Ident cls)) args'
                 local
-                    (\env -> env { varMem = M.union (vattrs vmt) args'WithSelf }
+                    (\env -> env { varMem = M.union (vattrs vmt) args'WithSelf, inClassMethod = Just cls }
                     )
                     (transStmt (BStmt b))
             state <- get
